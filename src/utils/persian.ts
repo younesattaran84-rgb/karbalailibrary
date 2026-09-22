@@ -80,10 +80,11 @@ export function jalaliToGregorian(jy: number, jm: number, jd: number): Date {
 // Parse Persian or standard date string into Gregorian Date
 export function parseDateSafe(dateStr?: string | null): Date | null {
   if (!dateStr) return null;
-  const clean = toEnglishDigits(dateStr.trim());
+  // Clean all hidden unicode bidi marks and non-printable characters
+  const clean = toEnglishDigits(String(dateStr).replace(/[\u200e\u200f\u202a-\u202e\u061c\u200b\u200c]/g, '').trim());
   
   // Try ISO / standard timestamp first
-  if (clean.includes('-') && !clean.includes('/')) {
+  if (clean.includes('T') || (clean.includes('-') && clean.length >= 10 && !clean.includes('/'))) {
     const d = new Date(clean);
     if (!isNaN(d.getTime())) return d;
   }
@@ -105,17 +106,31 @@ export function parseDateSafe(dateStr?: string | null): Date | null {
 }
 
 // Calculate remaining days from current UTC/World time to due date
-export function getDaysRemaining(dueDateStr?: string | null): number | null {
-  if (!dueDateStr) return null;
-  const dueDate = parseDateSafe(dueDateStr);
-  if (!dueDate) return null;
+export function getDaysRemaining(dueDateStr?: string | null, dueDateIso?: string | null): number {
+  if (!dueDateStr && !dueDateIso) return 0;
+  
+  let dueDate: Date | null = null;
+  if (dueDateIso) {
+    const parsedIso = new Date(dueDateIso);
+    if (!isNaN(parsedIso.getTime())) {
+      dueDate = parsedIso;
+    }
+  }
+  
+  if (!dueDate && dueDateStr) {
+    dueDate = parseDateSafe(dueDateStr);
+  }
+  
+  if (!dueDate) return 0;
 
+  // Global / World UTC time comparison
   const now = new Date();
-  const utcNow = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const utcNow = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const utcDue = Date.UTC(dueDate.getUTCFullYear(), dueDate.getUTCMonth(), dueDate.getUTCDate());
 
   const diffTime = utcDue - utcNow;
-  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+  const days = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  return isNaN(days) ? 0 : days;
 }
 
 // Check if library is currently open based on default and admin rules

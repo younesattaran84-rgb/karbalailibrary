@@ -14,6 +14,8 @@ interface AccountModalProps {
   onLogout: () => void;
   userReservations?: Reservation[];
   onExtendReservation?: (reservationId: string, weeks?: 1 | 2) => Promise<boolean>;
+  onOpenUserPanel?: () => void;
+  onOpenAdminPanel?: () => void;
 }
 
 export const AccountModal: React.FC<AccountModalProps> = ({
@@ -27,6 +29,8 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   onLogout,
   userReservations = [],
   onExtendReservation,
+  onOpenUserPanel,
+  onOpenAdminPanel,
 }) => {
   const [activeTab, setActiveTab] = useState<'user' | 'register' | 'admin'>('user');
   const [phone, setPhone] = useState('');
@@ -425,6 +429,36 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   )}
                 </div>
               </div>
+            )}
+
+            {/* Direct Link to Dedicated User Panel */}
+            {!isAdmin && currentUser && onOpenUserPanel && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenUserPanel();
+                }}
+                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-[#84cc16] to-[#65a30d] hover:from-[#a3e635] hover:to-[#84cc16] text-[#042f2e] font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-[#84cc16]/20 transition-all hover:scale-[1.02] active:scale-95"
+              >
+                <User className="w-4 h-4" />
+                <span>ورود به پنل جامع و تمام‌صفحه کاربری</span>
+              </button>
+            )}
+
+            {/* Direct Link to Dedicated Admin Panel */}
+            {isAdmin && onOpenAdminPanel && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenAdminPanel();
+                }}
+                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-[#eab308] to-[#ca8a04] hover:from-[#facc15] hover:to-[#eab308] text-[#042f2e] font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition-all hover:scale-[1.02] active:scale-95"
+              >
+                <Shield className="w-4 h-4" />
+                <span>ورود به پنل مدیریت کتابخانه</span>
+              </button>
             )}
 
             <button

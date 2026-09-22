@@ -3,6 +3,7 @@ import { Search, Filter, BookOpen, Layers, Bookmark, CheckCircle, Clock, AlertCi
 import { Book, UserProfile } from '../types';
 import { toPersianDigits } from '../utils/persian';
 import { SUBJECTS_LIST } from '../data/initialData';
+import { PaginationControls } from './PaginationControls';
 
 interface CatalogViewProps {
   books: Book[];
@@ -30,6 +31,10 @@ export const CatalogView: React.FC<CatalogViewProps> = ({
   const [reserving, setReserving] = useState(false);
   const [reservationMessage, setReservationMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Pagination state (10 to 50 items per page)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
   // Filter books
   const filteredBooks = useMemo(() => {
     return books.filter((b) => {
@@ -56,6 +61,17 @@ export const CatalogView: React.FC<CatalogViewProps> = ({
       return matchSearch && matchShelf && matchRow && matchSubject && matchAvailability;
     });
   }, [books, searchQuery, rowQuery, selectedShelf, selectedSubject, selectedAvailability]);
+
+  // Reset page to 1 when filters change
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, rowQuery, selectedShelf, selectedSubject, selectedAvailability]);
+
+  // Paginated slice
+  const paginatedBooks = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredBooks.slice(start, start + pageSize);
+  }, [filteredBooks, currentPage, pageSize]);
 
   const handleReserve = async (book: Book) => {
     if (!currentUser) {
@@ -253,90 +269,102 @@ export const CatalogView: React.FC<CatalogViewProps> = ({
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {filteredBooks.map((book) => {
-                const isAvailable = book.availability_status === 'موجود';
-                return (
-                  <div
-                    key={book.id}
-                    onClick={() => {
-                      setSelectedBookForDetails(book);
-                      setReservationMessage(null);
-                    }}
-                    className="cursor-pointer group relative rounded-3xl bg-[#073834]/90 hover:bg-[#073834] border border-[#0d9488]/40 hover:border-[#84cc16]/60 p-5 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 flex flex-col justify-between"
-                  >
-                    {/* Cover */}
-                    <div className="relative w-full h-52 rounded-2xl overflow-hidden mb-4 bg-gradient-to-br from-[#042f2e] to-[#0f766e] border border-[#0d9488]/30 flex items-center justify-center shadow-inner group-hover:scale-[1.02] transition-transform">
-                      {book.cover_image ? (
-                        <img
-                          src={book.cover_image}
-                          alt={book.title}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="w-32 h-44 rounded-r-lg rounded-l-sm bg-gradient-to-tr from-[#064e3b] to-[#0f766e] p-3 text-center border-l-4 border-[#042f2e] flex flex-col justify-between shadow-lg">
-                          <span className="text-[10px] text-[#a3e635]">قفسه {toPersianDigits(book.shelf)}</span>
-                          <h4 className="text-xs font-bold text-white leading-snug line-clamp-3">
-                            {book.title}
-                          </h4>
-                          <span className="text-[9px] text-[#99f6e4] line-clamp-1">{book.author}</span>
-                        </div>
-                      )}
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                {paginatedBooks.map((book) => {
+                  const isAvailable = book.availability_status === 'موجود';
+                  return (
+                    <div
+                      key={book.id}
+                      onClick={() => {
+                        setSelectedBookForDetails(book);
+                        setReservationMessage(null);
+                      }}
+                      className="cursor-pointer group relative rounded-3xl bg-[#073834]/90 hover:bg-[#073834] border border-[#0d9488]/40 hover:border-[#84cc16]/60 p-5 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 flex flex-col justify-between"
+                    >
+                      {/* Cover */}
+                      <div className="relative w-full h-52 rounded-2xl overflow-hidden mb-4 bg-gradient-to-br from-[#042f2e] to-[#0f766e] border border-[#0d9488]/30 flex items-center justify-center shadow-inner group-hover:scale-[1.02] transition-transform">
+                        {book.cover_image ? (
+                          <img
+                            src={book.cover_image}
+                            alt={book.title}
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="w-32 h-44 rounded-r-lg rounded-l-sm bg-gradient-to-tr from-[#064e3b] to-[#0f766e] p-3 text-center border-l-4 border-[#042f2e] flex flex-col justify-between shadow-lg">
+                            <span className="text-[10px] text-[#a3e635]">قفسه {toPersianDigits(book.shelf)}</span>
+                            <h4 className="text-xs font-bold text-white leading-snug line-clamp-3">
+                              {book.title}
+                            </h4>
+                            <span className="text-[9px] text-[#99f6e4] line-clamp-1">{book.author}</span>
+                          </div>
+                        )}
 
-                      {/* Availability Badge */}
-                      <div className="absolute top-2.5 right-2.5">
-                        <span
-                          className={`px-2.5 py-1 rounded-full text-[11px] font-bold shadow-md flex items-center gap-1 ${
-                            isAvailable
-                              ? 'bg-[#84cc16] text-[#042f2e]'
-                              : 'bg-amber-500 text-stone-900'
-                          }`}
-                        >
-                          <span>{book.availability_status}</span>
+                        {/* Availability Badge */}
+                        <div className="absolute top-2.5 right-2.5">
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-[11px] font-bold shadow-md flex items-center gap-1 ${
+                              isAvailable
+                                ? 'bg-[#84cc16] text-[#042f2e]'
+                                : 'bg-amber-500 text-stone-900'
+                            }`}
+                          >
+                            <span>{book.availability_status}</span>
+                          </span>
+                        </div>
+
+                        {/* Shelf and Row */}
+                        <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-lg bg-black/70 text-[#a3e635] text-[10px] font-bold backdrop-blur-sm">
+                          قفسه {toPersianDigits(book.shelf)} - ردیف {toPersianDigits(book.row_number)}
+                        </div>
+                      </div>
+
+                      {/* Metadata */}
+                      <div>
+                        <span className="text-[11px] font-semibold text-[#84cc16] flex items-center gap-1 mb-1">
+                          <Bookmark className="w-3 h-3" />
+                          <span>{book.subject}</span>
+                        </span>
+
+                        <h3 className="text-base font-extrabold text-white leading-snug group-hover:text-[#a3e635] transition-colors line-clamp-2">
+                          {book.title}
+                        </h3>
+
+                        <p className="text-xs text-[#99f6e4] mt-1 font-medium line-clamp-1">
+                          {book.author}
+                        </p>
+
+                        {book.publisher && (
+                          <p className="text-[11px] text-[#ccfbf1]/70 mt-0.5 line-clamp-1">
+                            ناشر: {book.publisher}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Footer */}
+                      <div className="mt-4 pt-3 border-t border-[#0d9488]/30 flex items-center justify-between text-xs">
+                        <span className="text-[11px] text-[#5eead4]">
+                          کد: {toPersianDigits(book.book_number)}
+                        </span>
+                        <span className="text-[#a3e635] font-bold group-hover:underline">
+                          مشاهده و رزرو
                         </span>
                       </div>
-
-                      {/* Shelf and Row */}
-                      <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-lg bg-black/70 text-[#a3e635] text-[10px] font-bold backdrop-blur-sm">
-                        قفسه {toPersianDigits(book.shelf)} - ردیف {toPersianDigits(book.row_number)}
-                      </div>
                     </div>
+                  );
+                })}
+              </div>
 
-                    {/* Metadata */}
-                    <div>
-                      <span className="text-[11px] font-semibold text-[#84cc16] flex items-center gap-1 mb-1">
-                        <Bookmark className="w-3 h-3" />
-                        <span>{book.subject}</span>
-                      </span>
-
-                      <h3 className="text-base font-extrabold text-white leading-snug group-hover:text-[#a3e635] transition-colors line-clamp-2">
-                        {book.title}
-                      </h3>
-
-                      <p className="text-xs text-[#99f6e4] mt-1 font-medium line-clamp-1">
-                        {book.author}
-                      </p>
-
-                      {book.publisher && (
-                        <p className="text-[11px] text-[#ccfbf1]/70 mt-0.5 line-clamp-1">
-                          ناشر: {book.publisher}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Footer */}
-                    <div className="mt-4 pt-3 border-t border-[#0d9488]/30 flex items-center justify-between text-xs">
-                      <span className="text-[11px] text-[#5eead4]">
-                        کد: {toPersianDigits(book.book_number)}
-                      </span>
-                      <span className="text-[#a3e635] font-bold group-hover:underline">
-                        مشاهده و رزرو
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+              {/* Pagination Controls */}
+              <PaginationControls
+                currentPage={currentPage}
+                totalItems={filteredBooks.length}
+                pageSize={pageSize}
+                onPageChange={setCurrentPage}
+                onPageSizeChange={setPageSize}
+                itemLabel="کتاب"
+              />
             </div>
           )}
         </div>

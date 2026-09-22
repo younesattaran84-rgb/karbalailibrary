@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, MapPin, User, BookOpen, Sparkles, HelpCircle, Trophy, X, Shield, Clock } from 'lucide-react';
+import { Menu, MapPin, User, LogIn, BookOpen, Sparkles, HelpCircle, Trophy, X, Shield, Clock } from 'lucide-react';
 import { LibraryLogo } from './LibraryLogo';
 import { EitaaIcon } from './EitaaIcon';
 import { isLibraryOpenNow, toPersianDigits } from '../utils/persian';
@@ -33,7 +33,11 @@ export const Header: React.FC<HeaderProps> = ({
   }, []);
 
   const navItems = [
-    { id: 'account', label: 'حساب کاربری', icon: User, isAccountAction: true },
+    ...(isAdmin
+      ? [{ id: 'admin', label: 'پنل ادمین', icon: Shield, isAccountAction: false }]
+      : isLoggedIn
+      ? [{ id: 'user-panel', label: 'پنل کاربری من', icon: User, isAccountAction: false }]
+      : [{ id: 'login', label: 'ورود به سایت', icon: LogIn, isAccountAction: true }]),
     { id: 'books', label: 'همه کتاب‌ها', icon: BookOpen },
     { id: 'intro', label: 'معرفی کتاب', icon: Sparkles },
     { id: 'competitions', label: 'مسابقات', icon: Trophy },
@@ -89,12 +93,12 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <Icon className={`w-4 h-4 transition-transform duration-200 group-hover:scale-110 ${isActive ? 'text-[#a3e635]' : 'text-[#5eead4]'}`} />
                   <span className="whitespace-nowrap">{item.label}</span>
-                  {item.id === 'account' && activeReservationsCount > 0 && (
+                  {(item.id === 'user-panel' || item.id === 'account' || item.id === 'login') && activeReservationsCount > 0 && (
                     <span className="inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold bg-[#84cc16] text-[#042f2e] rounded-full">
                       {toPersianDigits(activeReservationsCount)}
                     </span>
                   )}
-                  {item.id === 'account' && isAdmin && (
+                  {item.id === 'admin' && (
                     <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] bg-[#eab308] text-[#042f2e] rounded-full font-bold">
                       <Shield className="w-2.5 h-2.5" />
                       مدیر
@@ -186,7 +190,11 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="mt-6 flex-1 overflow-y-auto space-y-1.5">
               {[
                 { id: 'home', label: 'خانه', icon: LibraryLogo },
-                { id: 'account', label: 'حساب کاربری / ورود ادمین', icon: User, isAccountAction: true },
+                ...(isAdmin
+                  ? [{ id: 'admin', label: 'پنل ادمین', icon: Shield, isAccountAction: false }]
+                  : isLoggedIn
+                  ? [{ id: 'user-panel', label: 'پنل کاربری من', icon: User, isAccountAction: false }]
+                  : [{ id: 'login', label: 'ورود به سایت', icon: LogIn, isAccountAction: true }]),
                 { id: 'books', label: 'همه کتاب‌ها', icon: BookOpen },
                 { id: 'intro', label: 'معرفی کتاب', icon: Sparkles },
                 { id: 'competitions', label: 'مسابقات کتابخوانی', icon: Trophy },
@@ -215,9 +223,15 @@ export const Header: React.FC<HeaderProps> = ({
                     }`}
                   >
                     <span>{item.label}</span>
-                    {item.id === 'account' && activeReservationsCount > 0 && (
+                    {(item.id === 'user-panel' || item.id === 'account' || item.id === 'login') && activeReservationsCount > 0 && (
                       <span className="px-2 py-0.5 text-xs bg-[#84cc16] text-[#042f2e] rounded-full font-bold">
                         {toPersianDigits(activeReservationsCount)}
+                      </span>
+                    )}
+                    {item.id === 'admin' && (
+                      <span className="px-2 py-0.5 text-[10px] bg-[#eab308] text-[#042f2e] rounded-full font-bold flex items-center gap-1">
+                        <Shield className="w-3 h-3" />
+                        مدیر
                       </span>
                     )}
                   </button>

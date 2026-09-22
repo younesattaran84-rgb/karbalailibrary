@@ -21,10 +21,14 @@ dotenv.config();
 const PORT = 3000;
 const DB_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DB_DIR, 'library_db.json');
+const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
 
-// Ensure data folder exists
+// Ensure data folder and public uploads folder exist
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
+}
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
 interface DatabaseSchema {
@@ -182,6 +186,10 @@ async function startServer() {
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', name: 'کتابخانه شهید احسان کربلایی‌پور' });
   });
+
+  // Serve static public uploads with caching
+  app.use('/uploads', express.static(UPLOADS_DIR));
+  app.use(express.static(path.join(process.cwd(), 'public')));
 
   // Request counter for stats
   app.use((req, res, next) => {
@@ -628,10 +636,13 @@ async function startServer() {
       });
     }
 
+    const user = db.users.find((u) => u.phone === cleanPhone);
+    const resolvedFullName = user ? `${user.name} ${user.family}` : (user_name || 'کاربر گرامی');
+
     const newReservation: Reservation = {
       id: `res-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       user_phone: cleanPhone,
-      user_name: user_name || 'کاربر گرامی',
+      user_name: resolvedFullName,
       book_id,
       book_title: book.title,
       book_number: book.book_number,
@@ -644,7 +655,6 @@ async function startServer() {
     db.reservations.unshift(newReservation);
 
     // Update user active count
-    const user = db.users.find((u) => u.phone === cleanPhone);
     if (user) {
       user.active_reservations_count = activeReservations.length + 1;
     }
@@ -662,7 +672,16 @@ async function startServer() {
   // Get all reservations (Admin or filtered by user)
   app.get('/api/reservations', (req, res) => {
     const { phone, status } = req.query;
-    let list = [...db.reservations];
+    let list = db.reservations.map((r) => {
+      // Resolve user's actual registered name + family if generic or missing
+      if (!r.user_name || r.user_name === 'کاربر گرامی' || !r.user_name.includes(' ')) {
+        const u = db.users.find((user) => user.phone === r.user_phone);
+        if (u && u.name && u.family) {
+          return { ...r, user_name: `${u.name} ${u.family}` };
+        }
+      }
+      return r;
+    });
 
     if (phone) {
       list = list.filter((r) => r.user_phone === (phone as string));
@@ -699,10 +718,16 @@ async function startServer() {
       const defaultDays = (loan_days && Number(loan_days) > 0) 
         ? Number(loan_days) 
         : (db.lending_settings?.default_loan_days || 14);
+      const now = new Date();
       if (!resItem.loan_started_at) {
-        resItem.loan_started_at = new Date().toLocaleDateString('fa-IR');
+        resItem.loan_started_at = now.toLocaleDateString('fa-IR');
+        resItem.loan_started_iso = now.toISOString();
       }
-      resItem.due_date = getFuturePersianDate(defaultDays);
+      resItem.loan_days = defaultDays;
+      const dueTime = new Date(Date.now() + defaultDays * 24 * 60 * 60 * 1000);
+      resItem.due_date_iso = dueTime.toISOString();
+      resItem.due_date = dueTime.toLocaleDateString('fa-IR');
+
       const bk = db.books.find((b) => b.id === resItem.book_id);
       if (bk) {
         bk.availability_status = status === 'امانت فعال' ? 'امانت' : 'رزرو شده';
@@ -726,16 +751,31 @@ async function startServer() {
     return res.json({ success: true, reservation: resItem, message: 'وضعیت رزرو با موفقیت به‌روزرسانی شد.' });
   });
 
-  // Admin permanently deletes a reservation/lending request
+  // Permanently deletes a reservation/lending request (Admin or User if returned/completed/cancelled)
   app.delete('/api/reservations/:id', (req, res) => {
+    const { phone } = req.query;
     const target = db.reservations.find((r) => r.id === req.params.id);
     if (!target) {
       return res.status(404).json({ success: false, message: 'درخواست رزرو یافت نشد.' });
     }
+    // If request has phone, verify if user is allowed: user can only delete if returned, completed, rejected, or cancelled
+    if (phone) {
+      const cleanPhone = (phone as string).trim();
+      if (target.user_phone !== cleanPhone) {
+        return res.status(403).json({ success: false, message: 'شما دسترسی به حذف این رزرو را ندارید.' });
+      }
+      const canDelete = ['تحویل داده شده', 'پایان یافته', 'لغو شده', 'رد شده'].includes(target.status);
+      if (!canDelete) {
+        return res.status(400).json({
+          success: false,
+          message: 'تنها رکوردهای پایان‌یافته، لغوشده یا تحویل داده‌شده قابلیت پاک‌سازی از لیست دارند.',
+        });
+      }
+    }
     db.reservations = db.reservations.filter((r) => r.id !== req.params.id);
     saveDatabase(db);
-    addAuditLog('حذف درخواست رزرو/امانت', 'مدیریت', `درخواست امانت کتاب "${target.book_title}" متعلق به ${target.user_name} حذف گردید.`, 'warning');
-    return res.json({ success: true, message: 'درخواست رزرو با موفقیت حذف گردید.' });
+    addAuditLog('حذف درخواست رزرو/امانت', target.user_name || 'کاربر', `درخواست امانت کتاب "${target.book_title}" حذف گردید.`, 'warning');
+    return res.json({ success: true, message: 'رکورد با موفقیت حذف گردید.' });
   });
 
   // SMS Reminder endpoint for due date notification
@@ -781,7 +821,9 @@ async function startServer() {
       resItem.extension_status = 'تأیید شده';
       resItem.extension_count = (resItem.extension_count || 0) + 1;
       const extensionDays = Number(days) || 7;
-      resItem.due_date = getFuturePersianDate(extensionDays);
+      const dueTime = new Date(Date.now() + extensionDays * 24 * 60 * 60 * 1000);
+      resItem.due_date_iso = dueTime.toISOString();
+      resItem.due_date = dueTime.toLocaleDateString('fa-IR');
       if (note) resItem.admin_notes = note;
       const bk = db.books.find((b) => b.id === resItem.book_id);
       if (bk) bk.due_date = resItem.due_date;
@@ -846,6 +888,24 @@ async function startServer() {
     return res.json({ success: true, messages: db.messages || [] });
   });
 
+  // User deletes their own message
+  app.delete('/api/messages/:id', (req, res) => {
+    const { phone } = req.query;
+    const msgId = req.params.id;
+    const msgIndex = (db.messages || []).findIndex((m) => m.id === msgId);
+    if (msgIndex === -1) {
+      return res.status(404).json({ success: false, message: 'پیام مورد نظر یافت نشد.' });
+    }
+    // If phone provided, verify ownership
+    if (phone && db.messages[msgIndex].user_phone !== (phone as string).trim()) {
+      return res.status(403).json({ success: false, message: 'شما دسترسی به حذف این پیام را ندارید.' });
+    }
+    const removedMsg = db.messages.splice(msgIndex, 1)[0];
+    saveDatabase(db);
+    addAuditLog('حذف پیام توسط کاربر', removedMsg.user_name || removedMsg.user_phone, `پیام موضوع "${removedMsg.subject}" حذف شد.`, 'info');
+    return res.json({ success: true, message: 'پیام با موفقیت حذف شد.' });
+  });
+
   // Admin replies to message (supports both PATCH and POST, with 'admin_reply' or 'reply')
   const handleAdminReply = (req: any, res: any) => {
     const { admin_reply, reply, status } = req.body;
@@ -887,7 +947,59 @@ async function startServer() {
     return res.json({ success: true, message: 'پیام با موفقیت حذف گردید.' });
   });
 
-  // ==================== IMAGE UPLOAD API (Cover Images) ====================
+  // ==================== GENERAL HIGH-SPEED FILE UPLOAD API ====================
+  // Supports uploading PDF, images, Excel, docs, e-books with high speed and serving from /uploads/
+  app.post('/api/upload/file', (req, res) => {
+    try {
+      const { file_data, file_name, file_type, description } = req.body;
+      if (!file_data || !file_name) {
+        return res.status(400).json({ success: false, message: 'اطلاعات فایل ارسالی ناقص است.' });
+      }
+
+      const safeName = `${Date.now()}-${file_name.replace(/[^a-zA-Z0-9.\u0600-\u06FF_-]/g, '_')}`;
+      const filePath = path.join(UPLOADS_DIR, safeName);
+
+      // Determine base64 vs plain
+      let buffer: Buffer;
+      if (file_data.includes(';base64,')) {
+        const base64Data = file_data.split(';base64,').pop();
+        buffer = Buffer.from(base64Data || '', 'base64');
+      } else {
+        buffer = Buffer.from(file_data, 'base64');
+      }
+
+      fs.writeFileSync(filePath, buffer);
+
+      const fileUrl = `/uploads/${safeName}`;
+      const managedFile: ManagedFile = {
+        id: `file-up-${Date.now()}`,
+        file_name,
+        file_type: file_name.endsWith('.xlsx') || file_name.endsWith('.xls') ? 'excel' : 'txt',
+        file_size: buffer.length,
+        uploaded_at: new Date().toLocaleDateString('fa-IR'),
+        records_count: 1,
+        status: 'فعال',
+        description: description || `فایل بارگذاری‌شده در سرور (${(buffer.length / 1024).toFixed(1)} کیلوبایت)`,
+      };
+
+      if (!db.managed_files) db.managed_files = [];
+      db.managed_files.unshift(managedFile);
+      saveDatabase(db);
+
+      addAuditLog('آپلود فایل جدید', 'کاربر/مدیریت', `فایل "${file_name}" با حجم ${(buffer.length / 1024).toFixed(1)} KB ذخیره شد.`, 'info');
+
+      return res.json({
+        success: true,
+        message: 'فایل با سرعت بالا در سرور ذخیره شد.',
+        url: fileUrl,
+        file: managedFile,
+        size: buffer.length,
+      });
+    } catch (err: any) {
+      console.error('File upload error:', err);
+      return res.status(500).json({ success: false, message: 'خطا در ذخیره‌سازی فایل در سرور' });
+    }
+  });
   // Accepts base64 image or data URL for book covers and uploads
   app.post('/api/upload/image', (req, res) => {
     try {

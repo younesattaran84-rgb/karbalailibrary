@@ -181,3 +181,51 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #14b8a6;
 }
+
+/* Golden Rotating Aura Border Effect */
+@keyframes spinGoldBorder {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.golden-rotating-border-container {
+  position: relative;
+  border-radius: 1.5rem;
+  overflow: hidden;
+  padding: 2px;
+  isolation: isolate;
+}
+
+.golden-rotating-border-container::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    #facc15 60deg,
+    #eab308 120deg,
+    transparent 180deg,
+    #fbbf24 240deg,
+    #84cc16 300deg,
+    transparent 360deg
+  );
+  animation: spinGoldBorder 8s linear infinite;
+  z-index: -1;
+}
+
+.golden-rotating-border-inner {
+  position: relative;
+  background-color: #073834;
+  border-radius: calc(1.5rem - 2px);
+  width: 100%;
+  height: 100%;
+}
+

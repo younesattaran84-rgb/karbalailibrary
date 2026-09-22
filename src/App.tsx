@@ -15,6 +15,7 @@ import { BookIntroductionView } from './components/BookIntroductionView';
 import { CompetitionsView } from './components/CompetitionsView';
 import { AccountModal } from './components/AccountModal';
 import { AdminDashboard } from './components/AdminDashboard';
+import { UserDashboard } from './components/UserDashboard';
 import { Footer } from './components/Footer';
 import {
   INITIAL_BOOKS,
@@ -27,7 +28,7 @@ import { Book, UserProfile, Reservation, FAQItem, OperatingHours, Competition } 
 
 export function App() {
   const [showLoading, setShowLoading] = useState(true);
-  const [currentTab, setCurrentTab] = useState<'home' | 'books' | 'intro' | 'competitions' | 'faq' | 'admin'>('home');
+  const [currentTab, setCurrentTab] = useState<'home' | 'books' | 'intro' | 'competitions' | 'faq' | 'admin' | 'user-panel'>('home');
   const [initialShelfFilter, setInitialShelfFilter] = useState<number | undefined>(undefined);
   
   // Data State
@@ -151,6 +152,8 @@ export function App() {
     }
     setCurrentUser(data.user);
     localStorage.setItem('lib_user', JSON.stringify(data.user));
+    setAccountModalOpen(false);
+    setCurrentTab('user-panel');
     return true;
   };
 
@@ -166,6 +169,8 @@ export function App() {
     }
     setCurrentUser(data.user);
     localStorage.setItem('lib_user', JSON.stringify(data.user));
+    setAccountModalOpen(false);
+    setCurrentTab('user-panel');
     return true;
   };
 
@@ -191,7 +196,7 @@ export function App() {
     localStorage.removeItem('lib_user');
     sessionStorage.removeItem('lib_admin');
     setAccountModalOpen(false);
-    if (currentTab === 'admin') setCurrentTab('home');
+    if (currentTab === 'admin' || currentTab === 'user-panel') setCurrentTab('home');
   };
 
   // Reservation Handler with celebratory Confetti!
@@ -231,7 +236,25 @@ export function App() {
 
   // Navigation Helper
   const handleNavigate = (tab: string) => {
-    if (tab === 'home' || tab === 'books' || tab === 'intro' || tab === 'competitions' || tab === 'faq' || tab === 'admin') {
+    if (tab === 'user-panel') {
+      if (currentUser) {
+        setCurrentTab('user-panel');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else {
+        setAccountModalOpen(true);
+      }
+      return;
+    }
+    if (tab === 'admin') {
+      if (isAdmin) {
+        setCurrentTab('admin');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else {
+        setAccountModalOpen(true);
+      }
+      return;
+    }
+    if (tab === 'home' || tab === 'books' || tab === 'intro' || tab === 'competitions' || tab === 'faq') {
       setCurrentTab(tab);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -313,11 +336,11 @@ export function App() {
     return data.success;
   };
 
-  const handleUpdateReservation = async (id: string, status: Reservation['status'], notes?: string) => {
+  const handleUpdateReservation = async (id: string, status: Reservation['status'], notes?: string, loanDays?: number) => {
     const res = await fetch(`/api/reservations/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, admin_notes: notes }),
+      body: JSON.stringify({ status, admin_notes: notes, loan_days: loanDays }),
     });
     const data = await res.json();
     loadDataFromServer();
@@ -458,23 +481,73 @@ export function App() {
           </div>
         )}
 
-        {currentTab === 'admin' && isAdmin && (
-          <AdminDashboard
-            books={books}
-            reservations={reservations}
-            faqs={faqs}
-            operatingHours={operatingHours}
-            onRefreshData={loadDataFromServer}
-            onImportHtml={handleImportHtml}
-            onBatchImportBooks={handleBatchImportBooks}
-            onAddBook={handleAddBook}
-            onUpdateBook={handleUpdateBook}
-            onDeleteBook={handleDeleteBook}
-            onUpdateReservation={handleUpdateReservation}
-            onUpdateOperatingHours={handleUpdateOperatingHours}
-            onUpdateFeaturedBooks={handleUpdateFeaturedBooks}
-            onClose={() => setCurrentTab('home')}
-          />
+        {currentTab === 'user-panel' && (
+          currentUser ? (
+            <UserDashboard
+              currentUser={currentUser}
+              onLogout={handleLogout}
+              onNavigateHome={() => {
+                setCurrentTab('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              onNavigateCatalog={() => {
+                setCurrentTab('books');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              onExtendReservation={handleExtendReservation}
+              onRefreshReservations={loadDataFromServer}
+            />
+          ) : (
+            <div className="py-24 text-center px-4">
+              <div className="max-w-md mx-auto p-8 rounded-3xl bg-[#073834] border border-[#0d9488]/40 space-y-4">
+                <p className="text-white font-bold text-base">برای دسترسی به پنل کاربری، ابتدا باید وارد حساب خود شوید.</p>
+                <button
+                  type="button"
+                  onClick={() => setAccountModalOpen(true)}
+                  className="px-6 py-2.5 rounded-2xl bg-[#84cc16] text-[#042f2e] font-black text-sm hover:bg-[#a3e635] transition-all"
+                >
+                  ورود به سایت
+                </button>
+              </div>
+            </div>
+          )
+        )}
+
+        {currentTab === 'admin' && (
+          isAdmin ? (
+            <AdminDashboard
+              books={books}
+              reservations={reservations}
+              faqs={faqs}
+              operatingHours={operatingHours}
+              onRefreshData={loadDataFromServer}
+              onImportHtml={handleImportHtml}
+              onBatchImportBooks={handleBatchImportBooks}
+              onAddBook={handleAddBook}
+              onUpdateBook={handleUpdateBook}
+              onDeleteBook={handleDeleteBook}
+              onUpdateReservation={handleUpdateReservation}
+              onUpdateOperatingHours={handleUpdateOperatingHours}
+              onUpdateFeaturedBooks={handleUpdateFeaturedBooks}
+              onClose={() => {
+                setCurrentTab('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+            />
+          ) : (
+            <div className="py-24 text-center px-4">
+              <div className="max-w-md mx-auto p-8 rounded-3xl bg-[#073834] border border-[#0d9488]/40 space-y-4">
+                <p className="text-white font-bold text-base">دسترسی به پنل مدیریت نیاز به احراز هویت دارد.</p>
+                <button
+                  type="button"
+                  onClick={() => setAccountModalOpen(true)}
+                  className="px-6 py-2.5 rounded-2xl bg-[#84cc16] text-[#042f2e] font-black text-sm hover:bg-[#a3e635] transition-all"
+                >
+                  ورود کادر مدیریت
+                </button>
+              </div>
+            </div>
+          )
         )}
       </main>
 
@@ -490,6 +563,14 @@ export function App() {
         onLogout={handleLogout}
         userReservations={userReservations}
         onExtendReservation={handleExtendReservation}
+        onOpenUserPanel={() => {
+          setAccountModalOpen(false);
+          setCurrentTab('user-panel');
+        }}
+        onOpenAdminPanel={() => {
+          setAccountModalOpen(false);
+          setCurrentTab('admin');
+        }}
       />
 
       {/* Footer */}

@@ -56,8 +56,11 @@ export interface Reservation {
   admin_notes?: string;
   pickup_deadline?: string;
   loan_duration_weeks?: 1 | 2 | 3 | 4;
+  loan_days?: number;
   loan_started_at?: string;
+  loan_started_iso?: string;
   due_date?: string;
+  due_date_iso?: string;
   remaining_days?: number;
   extension_status?: 'ندارد' | 'در انتظار بررسی' | 'تأیید شده' | 'رد شده';
   extension_count?: number; // max 1

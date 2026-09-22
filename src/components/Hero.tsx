@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Search, BookOpen, Sparkles, MapPin } from 'lucide-react';
 import { EitaaIcon } from './EitaaIcon';
+import { HeroSingle3DBook } from './Hero3DBooks';
 import { isLibraryOpenNow } from '../utils/persian';
 
 interface HeroProps {
@@ -46,20 +47,51 @@ export const Hero: React.FC<HeroProps> = ({ onSearchClick, onExploreShelvesClick
       <div className="absolute top-1/4 right-5 w-80 h-80 rounded-full bg-[#0d9488]/20 blur-3xl pointer-events-none" />
       <div className="absolute bottom-10 left-5 w-72 h-72 rounded-full bg-[#84cc16]/15 blur-3xl pointer-events-none" />
 
+      {/* Background Decorative 3D Book 2 (Floating on Left side of the text) */}
+      <div className="hidden lg:block absolute left-8 top-36 z-20 pointer-events-auto">
+        <HeroSingle3DBook
+          bookIndex={1}
+          width={130}
+          height={180}
+          depth={24}
+          initialRotateY={-24}
+          initialRotateX={8}
+          initialRotateZ={-10}
+          floatingDuration={6}
+        />
+      </div>
+
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 text-right">
-        {/* Live Library Status Pill */}
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#0d9488]/20 border border-[#84cc16]/40 text-[#a3e635] text-xs font-bold mb-6 shadow-sm"
-        >
-          <span className={`w-2.5 h-2.5 rounded-full ${status.isOpen ? 'bg-[#a3e635] animate-ping' : 'bg-rose-500'}`} />
-          <span>{status.statusText}</span>
-          <span className="text-[#99f6e4] font-normal border-r border-[#0d9488]/40 pr-2 mr-1">
-            ساعت کاری: ۱۳:۰۰ الی ۲۰:۰۰
-          </span>
-        </motion.div>
+        {/* Top Section: Status & Book 1 Placed ABOVE the text */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+          {/* Live Library Status Pill */}
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+            className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#0d9488]/20 border border-[#84cc16]/40 text-[#a3e635] text-xs font-bold shadow-sm self-start"
+          >
+            <span className={`w-2.5 h-2.5 rounded-full ${status.isOpen ? 'bg-[#a3e635] animate-ping' : 'bg-rose-500'}`} />
+            <span>{status.statusText}</span>
+            <span className="text-[#99f6e4] font-normal border-r border-[#0d9488]/40 pr-2 mr-1">
+              ساعت کاری: ۱۳:۰۰ الی ۲۰:۰۰
+            </span>
+          </motion.div>
+
+          {/* Book 1: Placed ABOVE the headline */}
+          <div className="self-center sm:self-end -mt-2 sm:-mt-6">
+            <HeroSingle3DBook
+              bookIndex={0}
+              width={115}
+              height={160}
+              depth={22}
+              initialRotateY={-16}
+              initialRotateX={12}
+              initialRotateZ={7}
+              floatingDuration={5.5}
+            />
+          </div>
+        </div>
 
         {/* Official Logo Display with Luminous Floating Frame */}
         <div className="mb-6 flex items-center">
@@ -85,38 +117,72 @@ export const Hero: React.FC<HeroProps> = ({ onSearchClick, onExploreShelvesClick
         </div>
 
         {/* Main Headline with Shimmer Light Wave Effect */}
-        <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-[3.1rem] font-black text-white leading-[1.35] tracking-tight">
-          <span className="hover-hop cursor-pointer transition-colors hover:text-[#a3e635]">
-            «کتاب‌ها
-          </span>{' '}
-          <span className="hover-hop cursor-pointer text-[#5eead4] hover:text-[#a3e635]">
-            کشتی‌هایی
-          </span>{' '}
-          <span className="hover-hop cursor-pointer transition-colors hover:text-[#a3e635]">
-            هستند
-          </span>{' '}
-          <span className="hover-hop cursor-pointer transition-colors hover:text-[#a3e635]">
-            که ما را به
-          </span>{' '}
-          <span className="hover-hop cursor-pointer text-[#84cc16] hover:text-[#a3e635] glow-text">
-            سرزمین‌های دور
-          </span>{' '}
-          <span className="hover-hop cursor-pointer transition-colors hover:text-[#a3e635]">
-            می‌برند»
-          </span>
-        </h1>
+        <div className="relative">
+          <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-[3.1rem] font-black text-white leading-[1.35] tracking-tight">
+            <span className="hover-hop cursor-pointer transition-colors hover:text-[#a3e635]">
+              «کتاب‌ها
+            </span>{' '}
+            <span className="hover-hop cursor-pointer text-[#5eead4] hover:text-[#a3e635]">
+              کشتی‌هایی
+            </span>{' '}
+            <span className="hover-hop cursor-pointer transition-colors hover:text-[#a3e635]">
+              هستند
+            </span>{' '}
+            <span className="hover-hop cursor-pointer transition-colors hover:text-[#a3e635]">
+              که ما را به
+            </span>{' '}
+            <span className="hover-hop cursor-pointer text-[#84cc16] hover:text-[#a3e635] glow-text">
+              سرزمین‌های دور
+            </span>{' '}
+            <span className="hover-hop cursor-pointer transition-colors hover:text-[#a3e635]">
+              می‌برند»
+            </span>
+          </h1>
 
-        {/* Subtitle */}
-        <h2 className="mt-5 text-xl sm:text-2xl font-extrabold text-[#99f6e4] flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-[#84cc16] animate-spin" style={{ animationDuration: '6s' }} />
-          <span className="shimmer-text">به کتابخانه شهید احسان کربلایی‌پور خوش آمدید</span>
-        </h2>
+          {/* Book 2 on mobile/tablet (left inclined) */}
+          <div className="block lg:hidden my-3">
+            <HeroSingle3DBook
+              bookIndex={1}
+              width={105}
+              height={145}
+              depth={20}
+              initialRotateY={-20}
+              initialRotateX={8}
+              initialRotateZ={-8}
+              floatingDuration={6}
+            />
+          </div>
+        </div>
 
-        {/* Welcoming Paragraph */}
-        <div className="mt-6 p-5 sm:p-6 rounded-2xl bg-[#073834]/80 border border-[#0d9488]/30 shadow-inner backdrop-blur-sm text-justify">
-          <p className="text-sm sm:text-base text-[#e6fffa] leading-relaxed font-normal hover:text-white transition-colors">
-            اینجا خانه‌ای برای اندیشه‌هاست. کتابخانه‌ای که به یاد شهید مدافع حرم، احسان کربلایی‌پور، بنا شده است تا چراغ دانش و آگاهی را در میان نسل امروز روشن نگه دارد. ما باور داریم که هر کتاب، پنجره‌ای به سوی جهانی تازه است و هر خواننده، ادامه‌دهنده راهی است که شهیدان برای سربلندی این سرزمین پیموده‌اند. در این کتابخانه، شما فقط کتاب امانت نمی‌گیرید؛ شما بخشی از یک خانواده فرهنگی می‌شوید که هدفش رشد، آگاهی و نزدیکی به آرمان‌های والای انسانی است.
-          </p>
+        {/* Subtitle & Book 3 Area (Bottom-Right with varied angle) */}
+        <div className="mt-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex-1">
+            <h2 className="text-xl sm:text-2xl font-extrabold text-[#99f6e4] flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-[#84cc16] animate-spin" style={{ animationDuration: '6s' }} />
+              <span className="shimmer-text">به کتابخانه شهید احسان کربلایی‌پور خوش آمدید</span>
+            </h2>
+
+            {/* Welcoming Paragraph */}
+            <div className="mt-4 p-5 sm:p-6 rounded-2xl bg-[#073834]/80 border border-[#0d9488]/30 shadow-inner backdrop-blur-sm text-justify">
+              <p className="text-sm sm:text-base text-[#e6fffa] leading-relaxed font-normal hover:text-white transition-colors">
+                اینجا خانه‌ای برای اندیشه‌هاست. کتابخانه‌ای که به یاد شهید مدافع حرم، احسان کربلایی‌پور، بنا شده است تا چراغ دانش و آگاهی را در میان نسل امروز روشن نگه دارد. ما باور داریم که هر کتاب، پنجره‌ای به سوی جهانی تازه است و هر خواننده، ادامه‌دهنده راهی است که شهیدان برای سربلندی این سرزمین پیموده‌اند. در این کتابخانه، شما فقط کتاب امانت نمی‌گیرید؛ شما بخشی از یک خانواده فرهنگی می‌شوید که هدفش رشد، آگاهی و نزدیکی به آرمان‌های والای انسانی است.
+              </p>
+            </div>
+          </div>
+
+          {/* Book 3: Placed at the bottom-right of the area, inclined at an angle */}
+          <div className="self-end md:self-center shrink-0 pt-2 md:pt-0 pr-0 md:pr-4">
+            <HeroSingle3DBook
+              bookIndex={2}
+              width={130}
+              height={180}
+              depth={24}
+              initialRotateY={-26}
+              initialRotateX={14}
+              initialRotateZ={9}
+              floatingDuration={4.8}
+            />
+          </div>
         </div>
 
         {/* Call To Action Buttons */}

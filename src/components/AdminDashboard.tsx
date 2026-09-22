@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Shield, Upload, BookOpen, Clock, Users, CheckCircle2,
   AlertCircle, Trash2, Edit3, Plus, ArrowLeft, RefreshCw,
   Sparkles, FileText, Search, Filter, MessageSquare, Send,
   Check, XCircle, RotateCcw, Calendar, CheckSquare, ChevronRight,
   ChevronLeft, Download, FileSpreadsheet, Eye, Info, Image as ImageIcon,
-  FileUp, Loader2, Trophy, Link, ExternalLink
+  FileUp, Loader2, Trophy, Link, ExternalLink, HelpCircle, Star, Zap
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Book, Reservation, FAQItem, OperatingHours, LendingSettings, UserMessage, ManagedFile, Competition, CompetitionRegistration, UserProfile } from '../types';
 import { toPersianDigits, getDaysRemaining } from '../utils/persian';
 import { SUBJECTS_LIST } from '../data/initialData';
+import { PaginationControls } from './PaginationControls';
 
 interface AdminDashboardProps {
   books: Book[];
@@ -23,7 +24,7 @@ interface AdminDashboardProps {
   onAddBook: (book: Partial<Book>) => Promise<boolean>;
   onUpdateBook: (id: string, updates: Partial<Book>) => Promise<boolean>;
   onDeleteBook: (id: string) => Promise<boolean>;
-  onUpdateReservation: (id: string, status: Reservation['status'], notes?: string) => Promise<boolean>;
+  onUpdateReservation: (id: string, status: Reservation['status'], notes?: string, loanDays?: number) => Promise<boolean>;
   onUpdateOperatingHours: (hours: OperatingHours) => Promise<boolean>;
   onUpdateFeaturedBooks: (bookIds: string[]) => Promise<boolean>;
   onClose: () => void;
@@ -45,8 +46,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onUpdateFeaturedBooks,
   onClose,
 }) => {
-  const [activeTab, setActiveTab] = useState<'reservations' | 'import' | 'books' | 'messages' | 'competitions' | 'featured' | 'hours'>('reservations');
+  const [activeTab, setActiveTab] = useState<'reservations' | 'books' | 'users' | 'competitions' | 'featured' | 'faq' | 'messages' | 'hours'>('reservations');
   
+  // Navigation tabs container ref & smooth scroll
+  const tabsContainerRef = useRef<HTMLDivElement>(null);
+  const handleScrollTabs = (direction: 'left' | 'right') => {
+    if (tabsContainerRef.current) {
+      const scrollAmount = direction === 'left' ? -220 : 220;
+      tabsContainerRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    }
+  };
+
   // Feedback banners
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
@@ -60,9 +70,181 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTimeout(() => setErrorBanner(null), 5000);
   };
 
+  // Loan duration per reservation map
+  const [loanDaysMap, setLoanDaysMap] = useState<Record<string, number>>({});
+
+  // Delete reservation
+  const handleDeleteReservation = async (id: string) => {
+    if (!window.confirm('آیا از حذف کامل این مورد از لیست امانت و رزروها اطمینان دارید؟')) return;
+    try {
+      const res = await fetch(`/api/reservations/${id}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success) {
+        showSuccess('مورد با موفقیت حذف گردید.');
+        onRefreshData();
+      } else {
+        showError(data.message || 'خطا در حذف مورد');
+      }
+    } catch {
+      showError('خطا در برقراری ارتباط');
+    }
+  };
+
+  // Users tab state
+  const [usersList, setUsersList] = useState<any[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+
+  const fetchUsersList = async () => {
+    setLoadingUsers(true);
+    try {
+      const res = await fetch('/api/admin/users');
+      const data = await res.json();
+      if (data.success && data.users) {
+        setUsersList(data.users);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  // FAQ tab state
+  const [adminFaqs, setAdminFaqs] = useState<FAQItem[]>(faqs);
+  const [faqCategoryFilter, setFaqCategoryFilter] = useState('all');
+  const [faqSearchQuery, setFaqSearchQuery] = useState('');
+  const [showFaqModal, setShowFaqModal] = useState(false);
+  const [editingFaqId, setEditingFaqId] = useState<string | null>(null);
+  const [faqForm, setFaqForm] = useState<{ category: string; question: string; answer: string; published: boolean }>({
+    category: 'عضویت و اشتراک',
+    question: '',
+    answer: '',
+    published: true,
+  });
+
+  const fetchFaqsList = async () => {
+    try {
+      const res = await fetch('/api/faq');
+      const data = await res.json();
+      if (data.success && data.faqs) {
+        setAdminFaqs(data.faqs);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  // Competition registrants modal state
+  const [selectedCompForRegistrants, setSelectedCompForRegistrants] = useState<Competition | null>(null);
+  const [compRegistrants, setCompRegistrants] = useState<CompetitionRegistration[]>([]);
+  const [loadingRegistrants, setLoadingRegistrants] = useState(false);
+  const [registrantSearch, setRegistrantSearch] = useState('');
+
+  const handleOpenRegistrantsModal = async (comp: Competition) => {
+    setSelectedCompForRegistrants(comp);
+    setRegistrantSearch('');
+    setLoadingRegistrants(true);
+    try {
+      const res = await fetch(`/api/competitions/${comp.id}/registrants`);
+      const data = await res.json();
+      if (data.success && data.registrations) {
+        setCompRegistrants(data.registrations);
+      } else {
+        setCompRegistrants([]);
+      }
+    } catch {
+      setCompRegistrants([]);
+    } finally {
+      setLoadingRegistrants(false);
+    }
+  };
+
+  const handleExportRegistrantsExcel = (comp: Competition, regs: CompetitionRegistration[]) => {
+    if (!regs || regs.length === 0) {
+      showError('هیچ شرکت‌کننده‌ای برای دریافت خروجی اکسل وجود ندارد.');
+      return;
+    }
+    const exportData = regs.map((r, idx) => ({
+      'ردیف': idx + 1,
+      'نام و نام خانوادگی': r.full_name,
+      'شماره تلفن همراه': r.phone,
+      'واحد ثبت‌نامی': r.unit || 'نامشخص',
+      'کتاب منبع انتخابی': r.selected_book || comp.book_title || 'نامشخص',
+      'تاریخ ثبت‌نام': r.registered_at || 'نامشخص',
+      'شناسه مسابقه': comp.id,
+      'عنوان مسابقه': comp.title,
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'شرکت‌کنندگان');
+    const safeTitle = comp.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 30);
+    XLSX.writeFile(workbook, `شرکت_کنندگان_مسابقه_${safeTitle}.xlsx`);
+    showSuccess('فایل اکسل اسامی شرکت‌کنندگان با موفقیت دانلود شد.');
+  };
+
+  const handleExportUsersExcel = () => {
+    if (!usersList || usersList.length === 0) {
+      showError('هیچ کاربری برای دریافت خروجی موجود نیست.');
+      return;
+    }
+    const exportData = usersList.map((u, idx) => ({
+      'ردیف': idx + 1,
+      'نام': u.name,
+      'نام خانوادگی': u.family,
+      'نام کامل': `${u.name} ${u.family}`,
+      'شماره تلفن همراه': u.phone,
+      'اشتراک امانت فعال': u.has_lending_subscription ? 'دارد' : 'ندارد',
+      'وضعیت عضویت': u.membership_status || 'فعال',
+      'تاریخ عضویت': u.registered_at || 'نامشخص',
+      'امانت‌های جاری': u.active_loans_count || 0,
+      'کل درخواست‌های رزرو': u.total_reservations || 0,
+      'مسابقات شرکت‌کرده': u.competitions_count || 0,
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'کاربران کتابخانه');
+    XLSX.writeFile(workbook, 'لیست_کاربران_کتابخانه_شهید_احسان_کربلایی_پور.xlsx');
+    showSuccess('فایل اکسل اطلاعات کاربران با موفقیت دانلود شد.');
+  };
+
+  // Featured 4 books CMS state
+  const [editingFeaturedSlot, setEditingFeaturedSlot] = useState<number | null>(null);
+  const [featuredSearchQuery, setFeaturedSearchQuery] = useState('');
+  const [featuredForm, setFeaturedForm] = useState<{
+    id?: string;
+    title: string;
+    author: string;
+    description: string;
+    excerpt: string;
+    story: string;
+    cover_image: string;
+  }>({
+    title: '',
+    author: '',
+    description: '',
+    excerpt: '',
+    story: '',
+    cover_image: '',
+  });
+
   // -------------------------------------------------------------
   // 1. FILE UPLOAD & MANAGEMENT (Excel, TXT, HTML)
   // -------------------------------------------------------------
+  // Pagination states for all tables (10 to 50 items)
+  const [booksPage, setBooksPage] = useState(1);
+  const [booksPageSize, setBooksPageSize] = useState(10);
+  const [resPage, setResPage] = useState(1);
+  const [resPageSize, setResPageSize] = useState(10);
+  const [usersPage, setUsersPage] = useState(1);
+  const [usersPageSize, setUsersPageSize] = useState(10);
+  const [messagesPage, setMessagesPage] = useState(1);
+  const [messagesPageSize, setMessagesPageSize] = useState(10);
+  const [registrantsPage, setRegistrantsPage] = useState(1);
+  const [registrantsPageSize, setRegistrantsPageSize] = useState(10);
+
   const [importMode, setImportMode] = useState<'append' | 'replace'>('append');
   const [stagedBooks, setStagedBooks] = useState<Partial<Book>[]>([]);
   const [stagedFileName, setStagedFileName] = useState<string>('');
@@ -92,20 +274,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   useEffect(() => {
-    if (activeTab === 'import') {
+    if (activeTab === 'books') {
       fetchManagedFiles();
     }
   }, [activeTab]);
 
-  // Parse Excel (.xlsx, .xls)
-  const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Smart Universal File Upload (Excel, TXT, HTML)
+  const handleSmartFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setImportLoading(true);
-    setStagedFileName(file.name);
-    setStagedFileType('excel');
+    const fileNameLower = file.name.toLowerCase();
     setErrorBanner(null);
+    setStagedFileName(file.name);
+
+    if (fileNameLower.endsWith('.xlsx') || fileNameLower.endsWith('.xls')) {
+      handleExcelUploadFile(file);
+    } else if (fileNameLower.endsWith('.html') || fileNameLower.endsWith('.htm')) {
+      handleHtmlUploadFile(file);
+    } else {
+      // Assume text (.txt, .csv, etc.)
+      handleTxtUploadFile(file);
+    }
+    // reset input value so re-selecting same file works
+    e.target.value = '';
+  };
+
+  const handleExcelUploadFile = (file: File) => {
+    setImportLoading(true);
+    setStagedFileType('excel');
 
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -121,7 +318,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
 
         const parsedBooks: Partial<Book>[] = rows.map((r, idx) => {
-          // Dynamic key resolution with fuzzy Persian & English matching
           const title = r['عنوان'] || r['نام کتاب'] || r['کتاب'] || r['Title'] || r['title'] || r['نام'] || `کتاب ${idx + 1}`;
           const author = r['نویسنده'] || r['پدیدآور'] || r['مولف'] || r['Author'] || r['author'] || 'نامشخص';
           const publisher = r['ناشر'] || r['انتشارات'] || r['Publisher'] || r['publisher'] || '';
@@ -163,15 +359,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     reader.readAsBinaryString(file);
   };
 
-  // Parse TXT / CSV file
-  const handleTxtUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleTxtUploadFile = (file: File) => {
     setImportLoading(true);
-    setStagedFileName(file.name);
     setStagedFileType('txt');
-    setErrorBanner(null);
 
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -186,6 +376,117 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleHtmlUploadFile = (file: File) => {
+    setImportLoading(true);
+    setStagedFileType('html');
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const html = evt.target?.result as string;
+        if (!html) throw new Error('فایل HTML خالی است.');
+        parseAndStageHtmlContent(html, file.name);
+      } catch (err: any) {
+        showError(err.message || 'خطا در پردازش فایل HTML');
+      } finally {
+        setImportLoading(false);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const parseAndStageHtmlContent = (htmlContent: string, fileName = 'فایل HTML') => {
+    const rowMatches = htmlContent.match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) || [];
+    if (rowMatches.length === 0) {
+      throw new Error('هیچ سطری (جدولی) در فایل HTML یافت نشد.');
+    }
+
+    const cleanText = (raw: string) => {
+      return raw
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&zwnj;/g, '‌')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .trim();
+    };
+
+    let headers: string[] = [];
+    const parsed: Partial<Book>[] = [];
+
+    for (let i = 0; i < rowMatches.length; i++) {
+      const row = rowMatches[i];
+      const thMatches = row.match(/<th[^>]*>([\s\S]*?)<\/th>/gi);
+      if (thMatches && thMatches.length > 0) {
+        headers = thMatches.map(cleanText);
+        continue;
+      }
+
+      const tdMatches = row.match(/<td[^>]*>([\s\S]*?)<\/td>/gi);
+      if (!tdMatches || tdMatches.length === 0) continue;
+
+      const cells = tdMatches.map(cleanText);
+      let title = '';
+      let author = '';
+      let publisher = '';
+      let subject = 'عمومی و متفرقه';
+      let shelf = 1;
+      let row_number = 1;
+      let book_number = `${1000 + i}`;
+      let description = '';
+
+      if (headers.length > 0 && headers.length === cells.length) {
+        headers.forEach((h, idx) => {
+          const hClean = h.toLowerCase();
+          const val = cells[idx];
+          if (hClean.includes('نام') || hClean.includes('عنوان') || hClean.includes('کتاب')) title = val;
+          else if (hClean.includes('نویسنده') || hClean.includes('مؤلف') || hClean.includes('پدیدآور')) author = val;
+          else if (hClean.includes('ناشر') || hClean.includes('انتشارات')) publisher = val;
+          else if (hClean.includes('موضوع') || hClean.includes('رده')) subject = val;
+          else if (hClean.includes('قفسه')) {
+            const num = parseInt(val.replace(/\D/g, ''), 10);
+            if (num >= 1 && num <= 16) shelf = num;
+          } else if (hClean.includes('ردیف')) {
+            const num = parseInt(val.replace(/\D/g, ''), 10);
+            if (!isNaN(num)) row_number = num;
+          } else if (hClean.includes('شماره') || hClean.includes('کد') || hClean.includes('ثبت')) book_number = val;
+          else if (hClean.includes('توضیح') || hClean.includes('شرح')) description = val;
+        });
+      } else {
+        title = cells[1] || cells[0] || '';
+        author = cells[2] || 'ناشناس';
+        publisher = cells[3] || '';
+        subject = cells[4] || 'عمومی و متفرقه';
+        book_number = cells[0] || `${1000 + i}`;
+      }
+
+      if (title && title.length > 1) {
+        parsed.push({
+          title,
+          author: author || 'ناشناس',
+          publisher: publisher || 'نامشخص',
+          subject: subject || 'عمومی و متفرقه',
+          shelf: Math.min(16, Math.max(1, shelf)),
+          row_number: Math.min(10, Math.max(1, row_number)),
+          book_number: book_number || `${1000 + i}`,
+          description: description || `کتاب «${title}» موجود در کتابخانه شهید احسان کربلایی‌پور.`,
+          availability_status: 'موجود',
+          reservation_allowed: true,
+        });
+      }
+    }
+
+    if (parsed.length === 0) {
+      throw new Error('هیچ اطلاعات کتابی از جدول HTML استخراج نشد.');
+    }
+
+    setStagedBooks(parsed);
+    setStagedFileName(fileName);
+    setStagedFileType('html');
+    showSuccess(`${toPersianDigits(parsed.length)} عنوان کتاب از فایل HTML شناسایی شد.`);
   };
 
   const parseAndStageTextContent = (text: string, fileName = 'متن ورودی') => {
@@ -417,7 +718,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     
     const matchesShelf = bookShelfFilter === 'all' || b.shelf === bookShelfFilter;
     const matchesSubject = bookSubjectFilter === 'all' || b.subject === bookSubjectFilter;
-    const matchesStatus = bookStatusFilter === 'all' || b.availability_status === bookStatusFilter;
+    const matchesStatus = bookStatusFilter === 'all' ||
+      (bookStatusFilter === 'امانت'
+        ? (b.availability_status === 'امانت' || (b.availability_status as string) === 'در حال امانت')
+        : b.availability_status === bookStatusFilter);
 
     return matchesSearch && matchesShelf && matchesSubject && matchesStatus;
   });
@@ -481,22 +785,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  useEffect(() => {
+    if (activeTab === 'users') {
+      fetchUsersList();
+    } else if (activeTab === 'faq') {
+      fetchFaqsList();
+    }
+  }, [activeTab]);
+
   const calculateLoanDaysInfo = (res: Reservation) => {
     if (!res.due_date || (res.status !== 'امانت فعال' && res.status !== 'تأیید شده')) return null;
-    const diffDays = getDaysRemaining(res.due_date);
-    if (diffDays === null || isNaN(diffDays)) {
-      return {
-        due_date_str: res.due_date,
-        diffDays: 0,
-        isOverdue: false,
-        isDueSoon: false,
-      };
-    }
+    const diffDays = getDaysRemaining(res.due_date, res.due_date_iso);
+    const safeDiffDays = typeof diffDays === 'number' && !isNaN(diffDays) ? diffDays : 0;
     return {
       due_date_str: res.due_date,
-      diffDays,
-      isOverdue: diffDays < 0,
-      isDueSoon: diffDays >= 0 && diffDays <= 3,
+      diffDays: safeDiffDays,
+      isOverdue: safeDiffDays < 0,
+      isDueSoon: safeDiffDays >= 0 && safeDiffDays <= 3,
     };
   };
 
@@ -625,6 +930,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     if (activeTab === 'competitions') {
       fetchCompetitions();
+    } else if (activeTab === 'users') {
+      fetchUsersList();
+    } else if (activeTab === 'faq') {
+      fetchFaqsList();
     }
   }, [activeTab]);
 
@@ -831,76 +1140,109 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-2 overflow-x-auto py-2 scrollbar-none no-scrollbar">
-          {[
-            {
-              id: 'reservations',
-              label: 'امانت و رزروها',
-              icon: Users,
-              badge: reservations.filter((r) => r.status === 'در انتظار بررسی' || r.extension_status === 'در انتظار بررسی').length,
-            },
-            {
-              id: 'import',
-              label: 'ورود فایل (Excel / TXT / HTML)',
-              icon: Upload,
-              badge: stagedBooks.length > 0 ? stagedBooks.length : undefined,
-            },
-            {
-              id: 'books',
-              label: 'مدیریت کتاب‌ها',
-              icon: BookOpen,
-              count: books.length,
-            },
-            {
-              id: 'messages',
-              label: 'پیام‌های کاربران',
-              icon: MessageSquare,
-              badge: messages.filter((m) => m.status === 'در انتظار پاسخ').length,
-            },
-            {
-              id: 'competitions',
-              label: 'مسابقات کتابخوانی',
-              icon: Trophy,
-              count: competitions.length > 0 ? competitions.length : undefined,
-            },
-            {
-              id: 'featured',
-              label: '۴ کتاب معرفی',
-              icon: Sparkles,
-            },
-            {
-              id: 'hours',
-              label: 'ساعات کاری و اطلاعیه',
-              icon: Clock,
-            },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`shrink-0 px-4 py-3 rounded-2xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all ${
-                  isActive
-                    ? 'bg-gradient-to-r from-[#0d9488] to-[#0f766e] text-white border border-[#84cc16]/50 shadow-lg'
-                    : 'bg-[#073834] text-[#ccfbf1] hover:bg-[#0d9488]/30 hover:text-white border border-[#0d9488]/30'
-                }`}
-              >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-[#a3e635]' : 'text-[#5eead4]'}`} />
-                <span>{tab.label}</span>
-                {tab.count !== undefined && (
-                  <span className="text-[11px] text-[#99f6e4]/80">({toPersianDigits(tab.count)})</span>
-                )}
-                {tab.badge !== undefined && tab.badge > 0 && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-[#84cc16] text-[#042f2e]">
-                    {toPersianDigits(tab.badge)} جدید
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        {/* Navigation Tabs with bilateral scroll arrows for desktop and mobile */}
+        <div className="relative flex items-center gap-1.5 w-full bg-[#042f2e]/60 p-1.5 rounded-2xl border border-[#0d9488]/30">
+          <button
+            type="button"
+            onClick={() => handleScrollTabs('right')}
+            className="shrink-0 p-2 rounded-xl bg-[#073834] hover:bg-[#0d9488] text-[#99f6e4] hover:text-white border border-[#0d9488]/40 shadow-md transition-all active:scale-95"
+            title="پیمایش به راست"
+            aria-label="پیمایش به راست"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+
+          <div
+            ref={tabsContainerRef}
+            className="flex-1 flex items-center gap-2 overflow-x-auto py-1 scrollbar-none no-scrollbar touch-pan-x scroll-smooth"
+          >
+            {[
+              {
+                id: 'reservations',
+                label: 'امانت و رزروها',
+                icon: Users,
+                badge: reservations.filter((r) => r.status === 'در انتظار بررسی' || r.extension_status === 'در انتظار بررسی').length,
+              },
+              {
+                id: 'books',
+                label: 'مدیریت کتاب‌ها',
+                icon: BookOpen,
+                count: books.length,
+              },
+              {
+                id: 'users',
+                label: 'اطلاعات کاربران',
+                icon: Users,
+                count: usersList.length > 0 ? usersList.length : undefined,
+              },
+              {
+                id: 'competitions',
+                label: 'مسابقات کتابخوانی',
+                icon: Trophy,
+                count: competitions.length > 0 ? competitions.length : undefined,
+              },
+              {
+                id: 'featured',
+                label: '۴ کتاب معرفی',
+                icon: Sparkles,
+              },
+              {
+                id: 'faq',
+                label: 'سؤالات متداول',
+                icon: HelpCircle,
+                count: adminFaqs.length > 0 ? adminFaqs.length : undefined,
+              },
+              {
+                id: 'messages',
+                label: 'پیام‌های کاربران',
+                icon: MessageSquare,
+                badge: messages.filter((m) => m.status === 'در انتظار پاسخ').length,
+              },
+              {
+                id: 'hours',
+                label: 'ساعات کاری و اطلاعیه',
+                icon: Clock,
+              },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={`shrink-0 px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-2 transition-all ${
+                    isActive
+                      ? 'bg-gradient-to-r from-[#0d9488] to-[#0f766e] text-white border border-[#84cc16]/50 shadow-lg scale-[1.02]'
+                      : 'bg-[#073834] text-[#ccfbf1] hover:bg-[#0d9488]/30 hover:text-white border border-[#0d9488]/30'
+                  }`}
+                >
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-[#84cc16]' : 'text-[#99f6e4]'}`} />
+                  <span>{tab.label}</span>
+                  {tab.badge !== undefined && tab.badge > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-black animate-pulse">
+                      {toPersianDigits(tab.badge)}
+                    </span>
+                  )}
+                  {tab.count !== undefined && !tab.badge && (
+                    <span className="px-2 py-0.5 rounded-full bg-[#042f2e] text-[#a3e635] text-[10px] font-bold border border-[#0d9488]/40">
+                      {toPersianDigits(tab.count)}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => handleScrollTabs('left')}
+            className="shrink-0 p-2 rounded-xl bg-[#073834] hover:bg-[#0d9488] text-[#99f6e4] hover:text-white border border-[#0d9488]/40 shadow-md transition-all active:scale-95"
+            title="پیمایش به چپ"
+            aria-label="پیمایش به چپ"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
         </div>
 
         {/* ========================================================= */}
@@ -1029,7 +1371,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <th className="py-3 px-3">نام عضو</th>
                         <th className="py-3 px-3">شماره تماس</th>
                         <th className="py-3 px-3">عنوان کتاب</th>
-                        <th className="py-3 px-3">قفسه / کد</th>
+                        <th className="py-3 px-3">قفسه / ردیف</th>
                         <th className="py-3 px-3">وضعیت امانت</th>
                         <th className="py-3 px-3">موعد تحویل</th>
                         <th className="py-3 px-3">وضعیت تمدید</th>
@@ -1037,7 +1379,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#0d9488]/20">
-                      {filteredReservations.map((res) => {
+                      {filteredReservations
+                        .slice((resPage - 1) * resPageSize, resPage * resPageSize)
+                        .map((res) => {
                         const loanInfo = calculateLoanDaysInfo(res);
                         return (
                           <tr key={res.id} className="hover:bg-[#042f2e]/60 transition-colors">
@@ -1045,7 +1389,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <td className="py-3 px-3 text-[#99f6e4]">{toPersianDigits(res.user_phone)}</td>
                             <td className="py-3 px-3 font-semibold text-white max-w-xs truncate">{res.book_title}</td>
                             <td className="py-3 px-3 text-[#5eead4]">
-                              قفسه {toPersianDigits(res.shelf)} (کد {toPersianDigits(res.book_number)})
+                              قفسه {toPersianDigits(res.shelf)} / ردیف {toPersianDigits(res.row_number || 1)}
                             </td>
                             <td className="py-3 px-3">
                               <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${
@@ -1119,12 +1463,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                             {/* Action buttons */}
                             <td className="py-3 px-3">
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {(res.status === 'در انتظار بررسی' || res.status === 'تأیید شده') && (
+                                  <div className="flex items-center gap-1 bg-[#042f2e] px-2 py-0.5 rounded-lg border border-[#0d9488]/40">
+                                    <span className="text-[#99f6e4] text-[10px]">مدت:</span>
+                                    <select
+                                      value={loanDaysMap[res.id] || 14}
+                                      onChange={(e) => setLoanDaysMap({ ...loanDaysMap, [res.id]: Number(e.target.value) })}
+                                      className="bg-transparent text-[#84cc16] font-bold text-[10px] focus:outline-none cursor-pointer"
+                                    >
+                                      <option value={7} className="bg-[#073834] text-white">۷ روز</option>
+                                      <option value={14} className="bg-[#073834] text-white">۱۴ روز</option>
+                                      <option value={21} className="bg-[#073834] text-white">۲۱ روز</option>
+                                      <option value={30} className="bg-[#073834] text-white">۳۰ روز</option>
+                                    </select>
+                                  </div>
+                                )}
+
                                 {res.status === 'در انتظار بررسی' && (
                                   <>
                                     <button
                                       type="button"
-                                      onClick={() => onUpdateReservation(res.id, 'تأیید شده', 'تأیید شد. آماده تحویل به عضو.')}
+                                      onClick={() => onUpdateReservation(res.id, 'تأیید شده', 'تأیید شد. آماده تحویل به عضو.', loanDaysMap[res.id] || 14)}
                                       className="px-2.5 py-1 rounded-lg bg-emerald-800 text-white hover:bg-emerald-700 text-[11px] font-bold"
                                     >
                                       تأیید
@@ -1142,7 +1502,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 {(res.status === 'تأیید شده' || res.status === 'در انتظار بررسی') && (
                                   <button
                                     type="button"
-                                    onClick={() => onUpdateReservation(res.id, 'امانت فعال', 'کتاب به عضو تحویل داده شد و دوره امانت آغاز شد.')}
+                                    onClick={() => onUpdateReservation(res.id, 'امانت فعال', 'کتاب به عضو تحویل داده شد و دوره امانت آغاز شد.', loanDaysMap[res.id] || 14)}
                                     className="px-2.5 py-1 rounded-lg bg-[#0d9488] text-white hover:bg-[#14b8a6] text-[11px] font-bold"
                                   >
                                     شروع امانت
@@ -1158,6 +1518,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     ثبت بازگشت کتاب
                                   </button>
                                 )}
+
+                                {/* Trash button to permanently delete this reservation/loan record */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteReservation(res.id)}
+                                  className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-400 hover:text-white border border-rose-800/40 transition-colors shadow-sm ml-auto"
+                                  title="حذف کامل این رزرو/امانت"
+                                  aria-label="حذف کامل"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -1167,108 +1538,117 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </table>
                 </div>
               )}
+
+              {/* Reservations Pagination */}
+              {filteredReservations.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-[#0d9488]/30">
+                  <PaginationControls
+                    currentPage={resPage}
+                    totalItems={filteredReservations.length}
+                    pageSize={resPageSize}
+                    onPageChange={setResPage}
+                    onPageSizeChange={(newSize) => {
+                      setResPageSize(newSize);
+                      setResPage(1);
+                    }}
+                    pageSizeOptions={[10, 20, 30, 40, 50]}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {/* ========================================================= */}
-        {/* TAB 2: FILE UPLOAD & MANAGEMENT (Excel, TXT, HTML) */}
+        {/* TAB 3: BOOKS MANAGEMENT (Full CRUD & Smart File Upload) */}
         {/* ========================================================= */}
-        {activeTab === 'import' && (
+        {activeTab === 'books' && (
           <div className="space-y-6">
-            <div className="p-6 sm:p-8 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl space-y-6">
-              <div>
-                <span className="px-3 py-1 rounded-full bg-[#042f2e] text-[#84cc16] text-xs font-bold border border-[#0d9488]/30 inline-block mb-2">
-                  مرحله ۱.۱ — ماژول جامع بارگذاری فایل‌ها
-                </span>
-                <h2 className="text-xl sm:text-2xl font-black text-white">
-                  افزودن و مدیریت فایل‌های کاتالوگ کتابخانه (Excel / TXT / HTML)
-                </h2>
-                <p className="text-xs sm:text-sm text-[#99f6e4] leading-relaxed mt-1">
-                  ادمین محترم، شما می‌توانید فایل‌های Excel (.xlsx, .xls) یا متنی (.txt, .csv) یا فایل HTML جدول کتاب‌ها را مستقیماً بارگذاری نمایید. سیستم به‌صورت هوشمند ستون‌ها را استخراج و در پایگاه داده کتابخانه ذخیره می‌کند.
-                </p>
-              </div>
-
-              {/* Upload Selection Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                
-                {/* 1. Excel Uploader */}
-                <div className="p-6 rounded-3xl bg-[#042f2e]/70 border-2 border-dashed border-[#0d9488] hover:border-[#84cc16] transition-colors text-center space-y-3">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-950 flex items-center justify-center text-[#84cc16] mx-auto">
-                    <FileSpreadsheet className="w-6 h-6" />
-                  </div>
-                  <h4 className="text-sm font-bold text-white">بارگذاری فایل Excel (.xlsx / .xls)</h4>
-                  <p className="text-[11px] text-[#99f6e4] leading-relaxed">
-                    فایل اکسل حاوی ستون‌های عنوان، نویسنده، ناشر، موضوع، شماره قفسه، ردیف و کد کتاب
+            <div className="p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl space-y-6">
+              
+              {/* Header and Add Button */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-[11px] font-bold text-[#84cc16]">مرحله ۱.۲ — ویرایش و مدیریت اطلاعات کتاب‌ها</span>
+                  <h3 className="text-xl font-black text-white mt-0.5">کاتالوگ و مشخصات کامل کتاب‌ها</h3>
+                  <p className="text-xs text-[#99f6e4]">
+                    امکان مشاهده، ویرایش عمیق، حذف و افزودن کتاب با تمام ویژگی‌های استاندارد کتابداری
                   </p>
-                  <label className="cursor-pointer inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-[#84cc16] hover:bg-[#a3e635] text-[#042f2e] font-black text-xs shadow-md transition-all">
-                    <Upload className="w-4 h-4" />
-                    <span>انتخاب فایل اکسل</span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Smart File Upload Button (Excel, TXT, HTML) */}
+                  <label className="cursor-pointer px-4 py-2.5 rounded-2xl bg-[#0d9488] hover:bg-[#14b8a6] text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-lg transition-all">
+                    <Upload className="w-4 h-4 text-[#5eead4]" />
+                    <span>افزودن هوشمند از فایل (اکسل، متنی، HTML)</span>
                     <input
                       type="file"
-                      accept=".xlsx,.xls"
-                      onChange={handleExcelUpload}
+                      accept=".xlsx,.xls,.txt,.csv,.html,.htm"
+                      onChange={handleSmartFileUpload}
                       className="hidden"
                     />
                   </label>
-                </div>
 
-                {/* 2. TXT / CSV Uploader */}
-                <div className="p-6 rounded-3xl bg-[#042f2e]/70 border-2 border-dashed border-[#0d9488] hover:border-[#84cc16] transition-colors text-center space-y-3">
-                  <div className="w-12 h-12 rounded-2xl bg-teal-950 flex items-center justify-center text-[#5eead4] mx-auto">
-                    <FileText className="w-6 h-6" />
-                  </div>
-                  <h4 className="text-sm font-bold text-white">بارگذاری فایل متنی TXT یا CSV</h4>
-                  <p className="text-[11px] text-[#99f6e4] leading-relaxed">
-                    فایل‌های متنی با جداکننده‌های کاما، خط عمودی (|) یا تب بین مشخصات کتاب
-                  </p>
-                  <label className="cursor-pointer inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-[#0d9488] hover:bg-[#14b8a6] text-white font-bold text-xs shadow-md transition-all">
-                    <Upload className="w-4 h-4" />
-                    <span>انتخاب فایل TXT / CSV</span>
-                    <input
-                      type="file"
-                      accept=".txt,.csv"
-                      onChange={handleTxtUpload}
-                      className="hidden"
-                    />
-                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddingBook(true);
+                      setEditingBookId(null);
+                      setBookForm(initialBookForm);
+                    }}
+                    className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-[#84cc16] to-[#65a30d] text-[#042f2e] font-black text-xs sm:text-sm flex items-center gap-2 shadow-lg"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>افزودن کتاب جدید</span>
+                  </button>
                 </div>
-
               </div>
 
-              {/* Staged Books Preview & Commit Card */}
+              {/* Staged Books Preview & Commit Card inside Books Tab */}
               {stagedBooks.length > 0 && (
                 <div className="p-5 rounded-3xl bg-[#042f2e] border-2 border-[#84cc16] space-y-4 animate-in fade-in">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <span className="text-[10px] font-bold text-[#84cc16] bg-[#073834] px-2.5 py-0.5 rounded-full border border-[#84cc16]/40">
-                        پیش‌نمایش قبل از ذخیره
+                        پیش‌نمایش قبل از ذخیره در کاتالوگ
                       </span>
                       <h4 className="text-base font-black text-white mt-1">
                         تعداد {toPersianDigits(stagedBooks.length)} عنوان از «{stagedFileName}» شناسایی گردید
                       </h4>
                     </div>
 
-                    {/* Mode Selector */}
-                    <div className="flex items-center gap-2 bg-[#073834] p-1.5 rounded-2xl border border-[#0d9488]/40">
+                    {/* Mode Selector & Quick Commit */}
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setImportMode('append')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                          importMode === 'append' ? 'bg-[#84cc16] text-[#042f2e]' : 'text-[#99f6e4]'
-                        }`}
+                        disabled={importLoading}
+                        onClick={handleCommitStagedImport}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#84cc16] to-[#65a30d] hover:from-[#a3e635] hover:to-[#84cc16] text-[#042f2e] font-black text-xs shadow-md flex items-center gap-1.5 transition-all animate-pulse"
                       >
-                        افزودن و بروزرسانی
+                        <Zap className="w-4 h-4 text-[#042f2e]" />
+                        <span>{importLoading ? 'در حال ثبت...' : 'اعمال و ثبت سریع تغییرات'}</span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setImportMode('replace')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                          importMode === 'replace' ? 'bg-rose-900 text-white' : 'text-[#99f6e4]'
-                        }`}
-                      >
-                        جایگزینی کامل کاتالوگ
-                      </button>
+
+                      <div className="flex items-center gap-2 bg-[#073834] p-1 rounded-2xl border border-[#0d9488]/40">
+                        <button
+                          type="button"
+                          onClick={() => setImportMode('append')}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                            importMode === 'append' ? 'bg-[#84cc16] text-[#042f2e]' : 'text-[#99f6e4]'
+                          }`}
+                        >
+                          افزودن و بروزرسانی
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setImportMode('replace')}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                            importMode === 'replace' ? 'bg-rose-900 text-white' : 'text-[#99f6e4]'
+                          }`}
+                        >
+                          جایگزینی کامل کاتالوگ
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -1322,115 +1702,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
               )}
-
-              {/* Direct Text Input Drawer */}
-              <div className="pt-4 border-t border-[#0d9488]/20 space-y-2">
-                <label className="block text-xs font-bold text-[#99f6e4]">
-                  ورود مستقیم متن جدول (Paste):
-                </label>
-                <textarea
-                  rows={3}
-                  value={rawTextInput}
-                  onChange={(e) => setRawTextInput(e.target.value)}
-                  placeholder="عنوان کتاب | نویسنده | ناشر | قفسه | ردیف | کد..."
-                  className="w-full p-3 rounded-2xl bg-[#042f2e] border border-[#0d9488]/40 text-xs text-white placeholder-[#99f6e4]/40 font-mono focus:ring-2 focus:ring-[#84cc16]"
-                />
-                <button
-                  type="button"
-                  disabled={!rawTextInput.trim()}
-                  onClick={() => parseAndStageTextContent(rawTextInput, 'متن الصاق شده')}
-                  className="px-4 py-2 rounded-xl bg-[#0d9488] hover:bg-[#14b8a6] text-white font-bold text-xs disabled:opacity-50"
-                >
-                  استخراج اطلاعات از متن
-                </button>
-              </div>
-            </div>
-
-            {/* Managed Files History Section */}
-            <div className="p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-black text-white">فایل‌های مدیریت‌شده در سیستم</h3>
-                  <p className="text-xs text-[#99f6e4] mt-0.5">
-                    لیست پرونده‌های بارگذاری‌شده اکسل و تکست جهت پیگیری و آرشیو
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={fetchManagedFiles}
-                  className="p-2 rounded-xl bg-[#042f2e] text-[#99f6e4] hover:text-white"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {managedFiles.length === 0 ? (
-                <p className="text-xs text-[#99f6e4] py-4 text-center">هیچ فایلی تا کنون ثبت نشده است.</p>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {managedFiles.map((f) => (
-                    <div
-                      key={f.id}
-                      className="p-3.5 rounded-2xl bg-[#042f2e] border border-[#0d9488]/40 text-xs space-y-2 relative"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                          f.file_type === 'excel' ? 'bg-emerald-950 text-[#a3e635]' : 'bg-teal-950 text-[#5eead4]'
-                        }`}>
-                          {f.file_type.toUpperCase()}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteManagedFile(f.id)}
-                          className="text-rose-400 hover:text-rose-300 p-1"
-                          title="حذف رکورد"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                      <strong className="block font-bold text-white truncate" title={f.name || f.file_name}>{f.name || f.file_name}</strong>
-                      <div className="flex items-center justify-between text-[11px] text-[#99f6e4]">
-                        <span>تعداد ردیف: {toPersianDigits(f.rows_count ?? f.records_count ?? 0)}</span>
-                        <span>{toPersianDigits(f.upload_date || f.uploaded_at || '')}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================= */}
-        {/* TAB 3: BOOKS MANAGEMENT (Full CRUD) */}
-        {/* ========================================================= */}
-        {activeTab === 'books' && (
-          <div className="space-y-6">
-            <div className="p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl space-y-6">
-              
-              {/* Header and Add Button */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <span className="text-[11px] font-bold text-[#84cc16]">مرحله ۱.۲ — ویرایش و مدیریت اطلاعات کتاب‌ها</span>
-                  <h3 className="text-xl font-black text-white mt-0.5">کاتالوگ و مشخصات کامل کتاب‌ها</h3>
-                  <p className="text-xs text-[#99f6e4]">
-                    امکان مشاهده، ویرایش عمیق، حذف و افزودن کتاب با تمام ویژگی‌های استاندارد کتابداری
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsAddingBook(true);
-                    setEditingBookId(null);
-                    setBookForm(initialBookForm);
-                  }}
-                  className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-[#84cc16] to-[#65a30d] text-[#042f2e] font-black text-xs sm:text-sm flex items-center gap-2 shadow-lg"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>افزودن کتاب جدید</span>
-                </button>
-              </div>
 
               {/* Add / Edit Form Modal / Card */}
               {(isAddingBook || editingBookId) && (
@@ -1748,13 +2019,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <select
                     value={bookStatusFilter}
                     onChange={(e) => setBookStatusFilter(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                    className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs font-bold"
                   >
                     <option value="all">همه وضعیت‌ها</option>
                     <option value="موجود">موجود</option>
-                    <option value="در حال امانت">در حال امانت</option>
-                    <option value="رزرو شده">رزرو شده</option>
-                    <option value="غیرقابل امانت">غیرقابل امانت</option>
+                    <option value="امانت">امانت</option>
                   </select>
                 </div>
               </div>
@@ -1775,7 +2044,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#0d9488]/20">
-                    {filteredBooks.slice(0, 100).map((b) => (
+                    {filteredBooks
+                      .slice((booksPage - 1) * booksPageSize, booksPage * booksPageSize)
+                      .map((b) => (
                       <tr key={b.id} className="hover:bg-[#042f2e]/60 transition-colors">
                         <td className="py-2.5 px-3 text-[#99f6e4] font-mono">{toPersianDigits(b.book_number)}</td>
                         <td className="py-2.5 px-3 font-bold text-white max-w-xs truncate">{b.title}</td>
@@ -1824,9 +2095,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </tbody>
                 </table>
               </div>
-              <p className="text-[11px] text-[#99f6e4]">
-                نمایش {toPersianDigits(Math.min(100, filteredBooks.length))} از مجموع {toPersianDigits(filteredBooks.length)} عنوان فیلترشده
-              </p>
+
+              {/* Books Pagination */}
+              {filteredBooks.length > 0 && (
+                <div className="pt-2 border-t border-[#0d9488]/30">
+                  <PaginationControls
+                    currentPage={booksPage}
+                    totalItems={filteredBooks.length}
+                    pageSize={booksPageSize}
+                    onPageChange={setBooksPage}
+                    onPageSizeChange={(newSize) => {
+                      setBooksPageSize(newSize);
+                      setBooksPage(1);
+                    }}
+                    pageSizeOptions={[10, 20, 30, 40, 50]}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1859,7 +2144,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <p className="text-xs text-[#99f6e4] py-8 text-center">هیچ پیامی در صندوق دریافت نشده است.</p>
             ) : (
               <div className="space-y-4">
-                {messages.map((m) => (
+                {messages
+                  .slice((messagesPage - 1) * messagesPageSize, messagesPage * messagesPageSize)
+                  .map((m) => (
                   <div
                     key={m.id}
                     className="p-4 rounded-2xl bg-[#042f2e] border border-[#0d9488]/40 space-y-3 text-xs"
@@ -1896,9 +2183,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                     {/* Existing Admin Reply */}
                     {m.admin_reply && (
-                      <div className="p-3 rounded-xl bg-[#073834]/60 border border-[#84cc16]/40 text-[#a3e635] text-xs">
-                        <strong className="block text-[11px] font-bold text-white mb-0.5">پاسخ ثبت‌شده مدیریت:</strong>
-                        <p>{m.admin_reply}</p>
+                      <div className="p-3.5 rounded-2xl bg-[#073834]/80 border border-[#84cc16]/50 text-[#a3e635] text-xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <strong className="block text-[11px] font-bold text-white">پاسخ ثبت‌شده مدیریت:</strong>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMessage(m.id)}
+                            className="px-2.5 py-1 rounded-xl bg-rose-950/70 hover:bg-rose-900 text-rose-300 text-[10px] font-bold border border-rose-800/40 flex items-center gap-1 transition-colors"
+                            title="حذف کامل این پیام پس از پاسخ"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>حذف پیام پس از پاسخ</span>
+                          </button>
+                        </div>
+                        <p className="text-[#f0fdfa] leading-relaxed">{m.admin_reply}</p>
                       </div>
                     )}
 
@@ -1923,6 +2221,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
                 ))}
+
+                {/* Messages Pagination */}
+                {messages.length > 0 && (
+                  <div className="pt-3 border-t border-[#0d9488]/30">
+                    <PaginationControls
+                      currentPage={messagesPage}
+                      totalItems={messages.length}
+                      pageSize={messagesPageSize}
+                      onPageChange={setMessagesPage}
+                      onPageSizeChange={(newSize) => {
+                        setMessagesPageSize(newSize);
+                        setMessagesPage(1);
+                      }}
+                      pageSizeOptions={[10, 20, 30, 40, 50]}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2075,6 +2390,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </a>
                         </div>
                       )}
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenRegistrantsModal(comp)}
+                        className="w-full py-2.5 px-3 rounded-xl bg-[#042f2e] hover:bg-[#0d9488]/30 border border-[#0d9488]/50 text-[#84cc16] hover:text-[#a3e635] text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-sm"
+                      >
+                        <Users className="w-4 h-4" />
+                        <span>مشاهده اسامی افراد ثبت‌نام شده</span>
+                      </button>
                     </div>
 
                     <div className="pt-3 border-t border-[#0d9488]/30 flex items-center justify-between text-xs">
@@ -2308,67 +2634,977 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
             )}
+
+            {/* Modal for Viewing Registrants & Export to Excel */}
+            {selectedCompForRegistrants && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm overflow-y-auto">
+                <div className="relative w-full max-w-4xl bg-[#042f2e] border-2 border-[#0d9488]/60 rounded-3xl p-6 sm:p-8 shadow-2xl text-right my-8 max-h-[90vh] flex flex-col">
+                  <div className="flex items-center justify-between pb-4 border-b border-[#0d9488]/30 mb-4 shrink-0">
+                    <div>
+                      <h3 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
+                        <Users className="w-6 h-6 text-[#84cc16]" />
+                        <span>اسامی شرکت‌کنندگان مسابقه «{selectedCompForRegistrants.title}»</span>
+                      </h3>
+                      <p className="text-xs text-[#99f6e4] mt-1">
+                        تعداد کل افراد ثبت‌نام شده:{' '}
+                        <span className="font-bold text-white text-sm">{toPersianDigits(compRegistrants.length)}</span> نفر
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCompForRegistrants(null)}
+                      className="p-1.5 rounded-xl bg-[#073834] text-stone-400 hover:text-white border border-[#0d9488]/30 transition-colors"
+                      title="بستن پنجره"
+                    >
+                      <XCircle className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* Actions & Search */}
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-4 shrink-0">
+                    <div className="relative w-full sm:w-80">
+                      <Search className="w-4 h-4 text-[#99f6e4] absolute right-3 top-2.5" />
+                      <input
+                        type="text"
+                        value={registrantSearch}
+                        onChange={(e) => setRegistrantSearch(e.target.value)}
+                        placeholder="جستجو بر اساس نام، تلفن، واحد یا کتاب..."
+                        className="w-full pl-3 pr-9 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs placeholder-stone-400"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleExportRegistrantsExcel(selectedCompForRegistrants, compRegistrants)}
+                      disabled={compRegistrants.length === 0}
+                      className="w-full sm:w-auto px-4 py-2 rounded-xl bg-[#84cc16] hover:bg-[#a3e635] disabled:opacity-50 text-[#042f2e] font-black text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-4 h-4" />
+                      <span>خروجی اکسل شرکت‌کنندگان (.csv)</span>
+                    </button>
+                  </div>
+
+                  {/* Registrants Table */}
+                  <div className="flex-1 overflow-y-auto rounded-2xl border border-[#0d9488]/30 bg-[#073834]/60">
+                    {loadingRegistrants ? (
+                      <div className="p-12 text-center text-[#99f6e4] flex items-center justify-center gap-2">
+                        <Loader2 className="w-5 h-5 animate-spin text-[#84cc16]" />
+                        <span>در حال دریافت لیست شرکت‌کنندگان...</span>
+                      </div>
+                    ) : compRegistrants.length === 0 ? (
+                      <div className="p-12 text-center text-sm text-[#99f6e4]">
+                        هنوز فردی در این مسابقه ثبت‌نام نکرده است.
+                      </div>
+                    ) : (
+                      <table className="w-full text-right text-xs">
+                        <thead className="sticky top-0 bg-[#042f2e] border-b border-[#0d9488]/40 text-[#a3e635]">
+                          <tr>
+                            <th className="py-3 px-3">ردیف</th>
+                            <th className="py-3 px-3">نام و نام خانوادگی</th>
+                            <th className="py-3 px-3">شماره تماس</th>
+                            <th className="py-3 px-3">واحد ثبت‌نامی</th>
+                            <th className="py-3 px-3">کتاب انتخابی</th>
+                            <th className="py-3 px-3">تاریخ ثبت‌نام</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#0d9488]/20">
+                          {(() => {
+                            const filtered = compRegistrants.filter((r) => {
+                              if (!registrantSearch) return true;
+                              const q = registrantSearch.toLowerCase();
+                              return (
+                                r.full_name.toLowerCase().includes(q) ||
+                                r.phone.includes(q) ||
+                                (r.unit && r.unit.toLowerCase().includes(q)) ||
+                                (r.selected_book && r.selected_book.toLowerCase().includes(q))
+                              );
+                            });
+                            return filtered
+                              .slice((registrantsPage - 1) * registrantsPageSize, registrantsPage * registrantsPageSize)
+                              .map((r, idx) => {
+                                const realIdx = (registrantsPage - 1) * registrantsPageSize + idx;
+                                return (
+                                  <tr key={r.id || realIdx} className="hover:bg-[#042f2e]/60 transition-colors">
+                                    <td className="py-2.5 px-3 text-[#99f6e4] font-bold">{toPersianDigits(realIdx + 1)}</td>
+                                    <td className="py-2.5 px-3 font-bold text-white">{r.full_name}</td>
+                                    <td className="py-2.5 px-3 text-[#5eead4] dir-ltr text-right">{toPersianDigits(r.phone)}</td>
+                                    <td className="py-2.5 px-3">
+                                      <span className="px-2 py-0.5 rounded-full bg-[#042f2e] text-[#a3e635] text-[10px] font-bold border border-[#0d9488]/30">
+                                        {r.unit || 'عموم مردم'}
+                                      </span>
+                                    </td>
+                                    <td className="py-2.5 px-3 text-[#ccfbf1]">{r.selected_book || '-'}</td>
+                                    <td className="py-2.5 px-3 text-stone-300 text-[11px]">{toPersianDigits(r.registered_at)}</td>
+                                  </tr>
+                                );
+                              });
+                          })()}
+                        </tbody>
+                      </table>
+                    )}
+
+                    {/* Registrants Pagination */}
+                    {compRegistrants.length > 0 && (
+                      <div className="pt-3 border-t border-[#0d9488]/30">
+                        <PaginationControls
+                          currentPage={registrantsPage}
+                          totalItems={
+                            compRegistrants.filter((r) => {
+                              if (!registrantSearch) return true;
+                              const q = registrantSearch.toLowerCase();
+                              return (
+                                r.full_name.toLowerCase().includes(q) ||
+                                r.phone.includes(q) ||
+                                (r.unit && r.unit.toLowerCase().includes(q)) ||
+                                (r.selected_book && r.selected_book.toLowerCase().includes(q))
+                              );
+                            }).length
+                          }
+                          pageSize={registrantsPageSize}
+                          onPageChange={setRegistrantsPage}
+                          onPageSizeChange={(newSize) => {
+                            setRegistrantsPageSize(newSize);
+                            setRegistrantsPage(1);
+                          }}
+                          pageSizeOptions={[10, 20, 30, 40, 50]}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* ========================================================= */}
-        {/* TAB 6: FEATURED 4 BOOKS SELECTOR */}
+        {/* TAB: USERS & MEMBERS MANAGEMENT */}
         {/* ========================================================= */}
-        {activeTab === 'featured' && (
-          <div className="p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl space-y-6">
-            <div>
-              <h3 className="text-xl font-black text-white">انتخاب ۴ کتاب ویژه جهت معرفی در صفحه «معرفی کتاب»</h3>
-              <p className="text-xs text-[#99f6e4] mt-1">
-                دقیقاً ۴ عنوان را از میان کاتالوگ انتخاب نمایید تا در بخش معرفی برجسته شوند.
-              </p>
+        {activeTab === 'users' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl">
+              <div>
+                <h3 className="text-xl font-black text-white flex items-center gap-2">
+                  <Users className="w-6 h-6 text-[#84cc16]" />
+                  <span>اطلاعات اعضا و کاربران کتابخانه</span>
+                </h3>
+                <p className="text-xs text-[#99f6e4] mt-1">
+                  مشاهده مشخصات کاربران ثبت‌نامی، وضعیت اشتراک امانت، امانت‌های جاری و امکان دریافت خروجی اکسل کامل
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={fetchUsersList}
+                  className="px-3.5 py-2.5 rounded-xl bg-[#042f2e] text-[#99f6e4] hover:text-white border border-[#0d9488]/40 text-xs font-bold flex items-center gap-2"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingUsers ? 'animate-spin' : ''}`} />
+                  <span>بروزرسانی</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportUsersExcel}
+                  disabled={usersList.length === 0}
+                  className="px-5 py-2.5 rounded-xl bg-[#84cc16] hover:bg-[#a3e635] disabled:opacity-50 text-[#042f2e] font-black text-xs flex items-center gap-2 shadow-lg transition-all cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>خروجی اکسل کاربران (.csv)</span>
+                </button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-              {books.slice(0, 24).map((b) => {
-                const isSelected = selectedFeatured.includes(b.id);
+            {/* Quick stats and Search */}
+            <div className="p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-4 rounded-2xl bg-[#042f2e] border border-[#0d9488]/30">
+                  <span className="text-xs text-[#99f6e4] block">کل اعضای ثبت‌نام شده:</span>
+                  <strong className="text-2xl font-black text-white mt-1 block">
+                    {toPersianDigits(usersList.length)} <span className="text-xs font-normal text-[#99f6e4]">نفر</span>
+                  </strong>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#042f2e] border border-[#0d9488]/30">
+                  <span className="text-xs text-[#99f6e4] block">دارای اشتراک امانت کتاب:</span>
+                  <strong className="text-2xl font-black text-[#a3e635] mt-1 block">
+                    {toPersianDigits(usersList.filter((u) => u.has_lending_subscription).length)} <span className="text-xs font-normal text-[#99f6e4]">عضو</span>
+                  </strong>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#042f2e] border border-[#0d9488]/30">
+                  <span className="text-xs text-[#99f6e4] block">امانت‌های فعال جاری:</span>
+                  <strong className="text-2xl font-black text-[#5eead4] mt-1 block">
+                    {toPersianDigits(reservations.filter((r) => r.status === 'امانت فعال').length)} <span className="text-xs font-normal text-[#99f6e4]">جلد</span>
+                  </strong>
+                </div>
+              </div>
+
+              {/* Search bar */}
+              <div className="relative">
+                <Search className="w-4 h-4 text-[#99f6e4] absolute right-3.5 top-3" />
+                <input
+                  type="text"
+                  value={userSearchQuery}
+                  onChange={(e) => setUserSearchQuery(e.target.value)}
+                  placeholder="جستجوی کاربر بر اساس نام، نام خانوادگی، شماره تماس..."
+                  className="w-full pl-4 pr-10 py-2.5 rounded-xl bg-[#042f2e] border border-[#0d9488]/40 text-white text-xs placeholder-stone-400 focus:outline-none focus:border-[#84cc16]"
+                />
+              </div>
+
+              {/* Users table */}
+              <div className="overflow-x-auto rounded-2xl border border-[#0d9488]/30 bg-[#042f2e]/60">
+                {loadingUsers ? (
+                  <div className="p-12 text-center text-[#99f6e4] flex items-center justify-center gap-2">
+                    <Loader2 className="w-6 h-6 animate-spin text-[#84cc16]" />
+                    <span>در حال بارگذاری لیست کاربران...</span>
+                  </div>
+                ) : usersList.length === 0 ? (
+                  <div className="p-12 text-center text-sm text-[#99f6e4]">
+                    هیچ کاربری یافت نشد.
+                  </div>
+                ) : (
+                  <table className="w-full text-right text-xs">
+                    <thead>
+                      <tr className="border-b border-[#0d9488]/40 text-[#a3e635] bg-[#042f2e]">
+                        <th className="py-3 px-3">ردیف</th>
+                        <th className="py-3 px-3">نام و نام خانوادگی</th>
+                        <th className="py-3 px-3">شماره تماس</th>
+                        <th className="py-3 px-3">اشتراک امانت</th>
+                        <th className="py-3 px-3">امانت‌های جاری</th>
+                        <th className="py-3 px-3">کل رزروها</th>
+                        <th className="py-3 px-3">تاریخ ثبت‌نام</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#0d9488]/20">
+                      {(() => {
+                        const filtered = usersList.filter((u) => {
+                          if (!userSearchQuery) return true;
+                          const q = userSearchQuery.toLowerCase();
+                          return (
+                            (u.name && u.name.toLowerCase().includes(q)) ||
+                            (u.family && u.family.toLowerCase().includes(q)) ||
+                            (u.phone && u.phone.includes(q))
+                          );
+                        });
+                        return filtered
+                          .slice((usersPage - 1) * usersPageSize, usersPage * usersPageSize)
+                          .map((u, idx) => {
+                            const realIdx = (usersPage - 1) * usersPageSize + idx;
+                            return (
+                              <tr key={u.id || realIdx} className="hover:bg-[#073834] transition-colors">
+                                <td className="py-3 px-3 text-[#99f6e4] font-bold">{toPersianDigits(realIdx + 1)}</td>
+                                <td className="py-3 px-3 font-bold text-white">
+                                  {u.name} {u.family}
+                                </td>
+                                <td className="py-3 px-3 text-[#5eead4] dir-ltr text-right">{toPersianDigits(u.phone)}</td>
+                                <td className="py-3 px-3">
+                                  {u.has_lending_subscription ? (
+                                    <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-950 text-[#a3e635] border border-[#84cc16]/40">
+                                      ✓ اشتراک فعال
+                                    </span>
+                                  ) : (
+                                    <span className="px-2.5 py-1 rounded-full text-[10px] text-[#99f6e4]/60 bg-[#073834] border border-[#0d9488]/20">
+                                      عادی
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span className="font-bold text-white">{toPersianDigits(u.active_loans_count || 0)}</span> جلد
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span className="text-[#99f6e4]">{toPersianDigits(u.total_reservations || 0)}</span> مورد
+                                </td>
+                                <td className="py-3 px-3 text-stone-300 text-[11px]">{toPersianDigits(u.registered_at || '-')}</td>
+                              </tr>
+                            );
+                          });
+                      })()}
+                    </tbody>
+                  </table>
+                )}
+
+                {/* Users Pagination */}
+                {usersList.length > 0 && (
+                  <div className="pt-3 border-t border-[#0d9488]/30">
+                    <PaginationControls
+                      currentPage={usersPage}
+                      totalItems={
+                        usersList.filter((u) => {
+                          if (!userSearchQuery) return true;
+                          const q = userSearchQuery.toLowerCase();
+                          return (
+                            (u.name && u.name.toLowerCase().includes(q)) ||
+                            (u.family && u.family.toLowerCase().includes(q)) ||
+                            (u.phone && u.phone.includes(q))
+                          );
+                        }).length
+                      }
+                      pageSize={usersPageSize}
+                      onPageChange={setUsersPage}
+                      onPageSizeChange={(newSize) => {
+                        setUsersPageSize(newSize);
+                        setUsersPage(1);
+                      }}
+                      pageSizeOptions={[10, 20, 30, 40, 50]}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================= */}
+        {/* TAB: FEATURED 4 BOOKS CMS */}
+        {/* ========================================================= */}
+        {activeTab === 'featured' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl">
+              <div>
+                <h3 className="text-xl font-black text-white flex items-center gap-2">
+                  <Star className="w-6 h-6 text-[#84cc16]" />
+                  <span>مدیریت ۴ کتاب ویژه معرفی</span>
+                </h3>
+                <p className="text-xs text-[#99f6e4] mt-1">
+                  ۴ بخش مجزا جهت معرفی کتاب‌های شاخص همراه با گزیده، داستان کتاب، عکس جلد و قابلیت جستجو و درج خودکار از کاتالوگ
+                </p>
+              </div>
+            </div>
+
+            {/* The 4 Featured Books Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {[0, 1, 2, 3].map((slotIndex) => {
+                const bookId = selectedFeatured[slotIndex];
+                const slotBook = books.find((b) => b.id === bookId) || books[slotIndex];
                 return (
                   <div
-                    key={b.id}
-                    onClick={() => {
-                      if (isSelected) {
-                        setSelectedFeatured(selectedFeatured.filter((id) => id !== b.id));
-                      } else {
-                        if (selectedFeatured.length < 4) {
-                          setSelectedFeatured([...selectedFeatured, b.id]);
-                        } else {
-                          showError('حداکثر ۴ کتاب برای بخش معرفی قابل انتخاب است.');
-                        }
-                      }
-                    }}
-                    className={`cursor-pointer p-4 rounded-2xl border transition-all text-xs flex flex-col justify-between ${
-                      isSelected
-                        ? 'bg-[#0d9488] border-[#84cc16] text-white shadow-lg'
-                        : 'bg-[#042f2e] border-[#0d9488]/30 text-[#ccfbf1]'
-                    }`}
+                    key={slotIndex}
+                    className="p-6 rounded-3xl bg-[#073834]/80 border-2 border-[#0d9488]/40 hover:border-[#84cc16]/50 shadow-xl flex flex-col justify-between space-y-4 transition-all"
                   >
-                    <div>
-                      <span className="text-[10px] text-[#a3e635] block mb-1">قفسه {toPersianDigits(b.shelf)}</span>
-                      <strong className="block font-bold line-clamp-2">{b.title}</strong>
-                      <span className="text-[11px] text-[#99f6e4]">{b.author}</span>
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="px-3 py-1 rounded-full text-xs font-black bg-[#84cc16] text-[#042f2e]">
+                          کتاب معرفی شماره {toPersianDigits(slotIndex + 1)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingFeaturedSlot(slotIndex);
+                            setFeaturedSearchQuery('');
+                            if (slotBook) {
+                              setFeaturedForm({
+                                id: slotBook.id,
+                                title: slotBook.title || '',
+                                author: slotBook.author || '',
+                                description: slotBook.description || '',
+                                excerpt: slotBook.excerpt || slotBook.description || '',
+                                story: slotBook.story || slotBook.description || '',
+                                cover_image: slotBook.cover_image || '',
+                              });
+                            } else {
+                              setFeaturedForm({
+                                title: '',
+                                author: '',
+                                description: '',
+                                excerpt: '',
+                                story: '',
+                                cover_image: '',
+                              });
+                            }
+                          }}
+                          className="px-3.5 py-1.5 rounded-xl bg-[#042f2e] hover:bg-[#84cc16] text-[#84cc16] hover:text-[#042f2e] border border-[#84cc16]/40 text-xs font-bold flex items-center gap-1.5 transition-all"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>ویرایش این کتاب</span>
+                        </button>
+                      </div>
+
+                      {/* Book Cover and Info */}
+                      <div className="flex gap-4 items-start pt-2">
+                        {slotBook?.cover_image ? (
+                          <img
+                            src={slotBook.cover_image}
+                            alt={slotBook.title}
+                            className="w-24 h-32 object-cover rounded-xl border border-[#0d9488]/40 shadow-md shrink-0"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="w-24 h-32 rounded-xl bg-[#042f2e] border border-[#0d9488]/40 flex items-center justify-center text-[#99f6e4] shrink-0">
+                            <BookOpen className="w-8 h-8 opacity-60 text-[#84cc16]" />
+                          </div>
+                        )}
+
+                        <div className="space-y-1.5 flex-1 min-w-0">
+                          <h4 className="text-base font-black text-white line-clamp-2">
+                            {slotBook?.title || `کتاب معرفی ${slotIndex + 1}`}
+                          </h4>
+                          <p className="text-xs text-[#a3e635] font-semibold">
+                            نویسنده: {slotBook?.author || 'نامشخص'}
+                          </p>
+                          {slotBook?.shelf && (
+                            <span className="inline-block text-[11px] text-[#5eead4]">
+                              قفسه {toPersianDigits(slotBook.shelf)} / ردیف {toPersianDigits(slotBook.row_number || 1)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Excerpt */}
+                      <div className="p-3 rounded-2xl bg-[#042f2e]/70 border border-[#0d9488]/20 space-y-1">
+                        <span className="text-[11px] font-bold text-[#99f6e4] block">گزیده کتاب:</span>
+                        <p className="text-xs text-[#ccfbf1]/90 leading-relaxed line-clamp-3">
+                          {slotBook?.excerpt || slotBook?.description || 'هنوز گزیده‌ای ثبت نشده است.'}
+                        </p>
+                      </div>
+
+                      {/* Story / Part of book */}
+                      <div className="p-3 rounded-2xl bg-[#042f2e]/70 border border-[#0d9488]/20 space-y-1">
+                        <span className="text-[11px] font-bold text-[#84cc16] block">بخشی از کتاب / داستان اثر:</span>
+                        <p className="text-xs text-[#ccfbf1]/90 leading-relaxed line-clamp-3">
+                          {slotBook?.story || 'هنوز بخشی از متن اثر ثبت نشده است.'}
+                        </p>
+                      </div>
                     </div>
-                    <span className="mt-3 font-bold text-[11px] text-[#a3e635]">
-                      {isSelected ? '✓ انتخاب شده' : '+ انتخاب'}
-                    </span>
                   </div>
                 );
               })}
             </div>
 
-            <button
-              type="button"
-              onClick={async () => {
-                await onUpdateFeaturedBooks(selectedFeatured);
-                showSuccess('۴ کتاب برگزیده بخش معرفی ذخیره گردید.');
-              }}
-              className="px-6 py-3 rounded-2xl bg-[#84cc16] text-[#042f2e] font-black text-xs shadow-lg hover:bg-[#a3e635]"
-            >
-              ذخیره ۴ کتاب برگزیده معرفی
-            </button>
+            {/* Modal for editing featured book with search & autofill from catalog */}
+            {editingFeaturedSlot !== null && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm overflow-y-auto">
+                <div className="relative w-full max-w-2xl bg-[#042f2e] border-2 border-[#0d9488]/60 rounded-3xl p-6 sm:p-8 shadow-2xl text-right my-8 max-h-[90vh] overflow-y-auto space-y-5">
+                  <div className="flex items-center justify-between pb-4 border-b border-[#0d9488]/30">
+                    <h3 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
+                      <Star className="w-6 h-6 text-[#84cc16]" />
+                      <span>ویرایش کتاب معرفی شماره {toPersianDigits(editingFeaturedSlot + 1)}</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setEditingFeaturedSlot(null)}
+                      className="p-1.5 rounded-xl bg-[#073834] text-stone-400 hover:text-white border border-[#0d9488]/30"
+                    >
+                      <XCircle className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* Search in catalog to autofill */}
+                  <div className="p-4 rounded-2xl bg-[#073834] border border-[#84cc16]/40 space-y-2">
+                    <label className="block text-xs font-bold text-[#84cc16] flex items-center gap-1.5">
+                      <Search className="w-4 h-4" />
+                      <span>وارد کردن سریع اطلاعات از کاتالوگ کتابخانه (جستجوی کتاب):</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={featuredSearchQuery}
+                        onChange={(e) => setFeaturedSearchQuery(e.target.value)}
+                        placeholder="نام کتاب یا نویسنده را تایپ کنید تا خودکار پر شود..."
+                        className="w-full px-3 py-2 rounded-xl bg-[#042f2e] border border-[#0d9488]/40 text-white text-xs placeholder-stone-400"
+                      />
+                    </div>
+
+                    {/* Autocomplete list */}
+                    {featuredSearchQuery.trim().length > 1 && (
+                      <div className="mt-2 max-h-40 overflow-y-auto rounded-xl bg-[#042f2e] border border-[#0d9488]/40 divide-y divide-[#0d9488]/20">
+                        {books
+                          .filter((b) =>
+                            b.title.toLowerCase().includes(featuredSearchQuery.toLowerCase()) ||
+                            b.author.toLowerCase().includes(featuredSearchQuery.toLowerCase())
+                          )
+                          .slice(0, 5)
+                          .map((b) => (
+                            <button
+                              key={b.id}
+                              type="button"
+                              onClick={() => {
+                                setFeaturedForm({
+                                  id: b.id,
+                                  title: b.title,
+                                  author: b.author,
+                                  description: b.description || '',
+                                  excerpt: b.excerpt || b.description || '',
+                                  story: b.story || b.description || '',
+                                  cover_image: b.cover_image || '',
+                                });
+                                setFeaturedSearchQuery('');
+                                showSuccess(`اطلاعات کتاب «${b.title}» بارگذاری شد.`);
+                              }}
+                              className="w-full p-2.5 text-right hover:bg-[#073834] flex items-center justify-between text-xs transition-colors"
+                            >
+                              <div>
+                                <strong className="text-white block">{b.title}</strong>
+                                <span className="text-[11px] text-[#99f6e4]">{b.author} (قفسه {toPersianDigits(b.shelf)})</span>
+                              </div>
+                              <span className="text-[10px] text-[#84cc16] font-bold">انتخاب و درج ↵</span>
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!featuredForm.title || !featuredForm.author) {
+                        showError('نام کتاب و نویسنده الزامی هستند.');
+                        return;
+                      }
+                      try {
+                        let bId = featuredForm.id;
+                        if (bId) {
+                          await onUpdateBook(bId, {
+                            title: featuredForm.title,
+                            author: featuredForm.author,
+                            description: featuredForm.description || featuredForm.excerpt,
+                            excerpt: featuredForm.excerpt,
+                            story: featuredForm.story,
+                            cover_image: featuredForm.cover_image,
+                          });
+                        } else {
+                          bId = `featured-book-${Date.now()}`;
+                          await onAddBook({
+                            id: bId,
+                            title: featuredForm.title,
+                            author: featuredForm.author,
+                            description: featuredForm.description || featuredForm.excerpt,
+                            excerpt: featuredForm.excerpt,
+                            story: featuredForm.story,
+                            cover_image: featuredForm.cover_image,
+                            shelf: 1,
+                            row_number: 1,
+                            availability_status: 'موجود',
+                          });
+                        }
+
+                        const nextFeatured = [...selectedFeatured];
+                        while (nextFeatured.length < 4) {
+                          nextFeatured.push(books[nextFeatured.length]?.id || bId);
+                        }
+                        nextFeatured[editingFeaturedSlot] = bId;
+                        setSelectedFeatured(nextFeatured);
+                        await onUpdateFeaturedBooks(nextFeatured);
+
+                        showSuccess('اطلاعات کتاب با موفقیت ذخیره و در بخش معرفی قرار گرفت.');
+                        setEditingFeaturedSlot(null);
+                        onRefreshData();
+                      } catch {
+                        showError('خطا در ذخیره اطلاعات کتاب');
+                      }
+                    }}
+                    className="space-y-4"
+                  >
+                    {/* Cover image upload / URL */}
+                    <div className="p-4 rounded-2xl bg-[#073834]/60 border border-[#0d9488]/40 space-y-3">
+                      <label className="block text-xs font-bold text-white flex items-center gap-1.5">
+                        <ImageIcon className="w-4 h-4 text-[#84cc16]" />
+                        <span>عکس جلد کتاب:</span>
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-3 items-center">
+                        <input
+                          type="text"
+                          value={featuredForm.cover_image || ''}
+                          onChange={(e) => setFeaturedForm({ ...featuredForm, cover_image: e.target.value })}
+                          placeholder="آدرس تصویر (URL) یا از دکمه آپلود استفاده نمایید..."
+                          className="w-full px-3 py-2 rounded-xl bg-[#042f2e] border border-[#0d9488]/40 text-white text-xs placeholder-stone-500"
+                        />
+                        <label className="shrink-0 px-4 py-2 rounded-xl bg-[#0d9488]/30 hover:bg-[#0d9488]/50 text-[#99f6e4] border border-[#0d9488]/50 text-xs font-bold flex items-center gap-1.5 cursor-pointer">
+                          <FileUp className="w-4 h-4 text-[#84cc16]" />
+                          <span>انتخاب فایل عکس</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  setFeaturedForm((prev) => ({ ...prev, cover_image: reader.result as string }));
+                                };
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+
+                      {featuredForm.cover_image && (
+                        <div className="mt-2 flex items-center gap-3">
+                          <img
+                            src={featuredForm.cover_image}
+                            alt="پیش‌نمایش جلد"
+                            className="w-16 h-20 object-cover rounded-xl border border-[#84cc16]/50 shadow"
+                            referrerPolicy="no-referrer"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setFeaturedForm({ ...featuredForm, cover_image: '' })}
+                            className="text-xs text-rose-400 hover:underline"
+                          >
+                            حذف تصویر جلد
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Book title & author */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                          نام کتاب: <span className="text-rose-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={featuredForm.title || ''}
+                          onChange={(e) => setFeaturedForm({ ...featuredForm, title: e.target.value })}
+                          className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                          نام نویسنده: <span className="text-rose-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={featuredForm.author || ''}
+                          onChange={(e) => setFeaturedForm({ ...featuredForm, author: e.target.value })}
+                          className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Excerpt */}
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                        گزیده و معرفی کوتاه کتاب:
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={featuredForm.excerpt || ''}
+                        onChange={(e) => setFeaturedForm({ ...featuredForm, excerpt: e.target.value })}
+                        placeholder="متن کوتاه معرفی کتاب جهت ترغیب مخاطب..."
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                      />
+                    </div>
+
+                    {/* Story / Part of book */}
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                        بخشی از کتاب (داستان اثر یا فرازی از متن):
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={featuredForm.story || ''}
+                        onChange={(e) => setFeaturedForm({ ...featuredForm, story: e.target.value })}
+                        placeholder="فرازی جذاب از متن کتاب یا داستان کوتاه آن..."
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                      />
+                    </div>
+
+                    {/* Submit buttons */}
+                    <div className="pt-4 flex items-center justify-end gap-3 border-t border-[#0d9488]/30">
+                      <button
+                        type="button"
+                        onClick={() => setEditingFeaturedSlot(null)}
+                        className="px-4 py-2.5 rounded-xl bg-[#073834] text-stone-300 hover:text-white text-xs font-bold"
+                      >
+                        انصراف
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-6 py-2.5 rounded-xl bg-[#84cc16] hover:bg-[#a3e635] text-[#042f2e] font-black text-xs shadow-lg"
+                      >
+                        ذخیره تغییرات کتاب معرفی
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================= */}
+        {/* TAB: FAQ MANAGEMENT */}
+        {/* ========================================================= */}
+        {activeTab === 'faq' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl">
+              <div>
+                <h3 className="text-xl font-black text-white flex items-center gap-2">
+                  <HelpCircle className="w-6 h-6 text-[#84cc16]" />
+                  <span>مدیریت سؤالات متداول (FAQ)</span>
+                </h3>
+                <p className="text-xs text-[#99f6e4] mt-1">
+                  مشاهده، ویرایش، حذف و افزودن سؤالات و پاسخ‌های متداول کاربران کتابخانه
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={fetchFaqsList}
+                  className="px-3.5 py-2.5 rounded-xl bg-[#042f2e] text-[#99f6e4] hover:text-white border border-[#0d9488]/40 text-xs font-bold flex items-center gap-2"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>بروزرسانی</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingFaqId(null);
+                    setFaqForm({
+                      category: 'عضویت و اشتراک',
+                      question: '',
+                      answer: '',
+                      published: true,
+                    });
+                    setShowFaqModal(true);
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-[#84cc16] hover:bg-[#a3e635] text-[#042f2e] font-black text-xs flex items-center gap-2 shadow-lg"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>افزودن سؤال متداول جدید</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter and Search */}
+            <div className="p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="relative w-full sm:w-80">
+                  <Search className="w-4 h-4 text-[#99f6e4] absolute right-3.5 top-3" />
+                  <input
+                    type="text"
+                    value={faqSearchQuery}
+                    onChange={(e) => setFaqSearchQuery(e.target.value)}
+                    placeholder="جستجو در سؤالات یا پاسخ‌ها..."
+                    className="w-full pl-4 pr-10 py-2.5 rounded-xl bg-[#042f2e] border border-[#0d9488]/40 text-white text-xs placeholder-stone-400 focus:outline-none focus:border-[#84cc16]"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
+                  {['all', 'عضویت و اشتراک', 'امانت و رزرو کتاب', 'مسابقات کتابخوانی', 'ساعات کاری و قوانین'].map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setFaqCategoryFilter(cat)}
+                      className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                        faqCategoryFilter === cat
+                          ? 'bg-[#84cc16] text-[#042f2e]'
+                          : 'bg-[#042f2e] text-[#99f6e4] hover:bg-[#0d9488]/20'
+                      }`}
+                    >
+                      {cat === 'all' ? 'همه دسته‌ها' : cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* FAQ Cards */}
+              <div className="space-y-3">
+                {adminFaqs
+                  .filter((f) => {
+                    const matchesCat = faqCategoryFilter === 'all' || f.category === faqCategoryFilter;
+                    const q = faqSearchQuery.toLowerCase();
+                    const matchesSearch = !q || f.question.toLowerCase().includes(q) || f.answer.toLowerCase().includes(q);
+                    return matchesCat && matchesSearch;
+                  })
+                  .map((faq) => (
+                    <div
+                      key={faq.id}
+                      className="p-5 rounded-2xl bg-[#042f2e] border border-[#0d9488]/30 hover:border-[#84cc16]/40 transition-all flex flex-col sm:flex-row sm:items-start justify-between gap-4"
+                    >
+                      <div className="space-y-2 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#073834] text-[#a3e635] border border-[#84cc16]/30">
+                            {faq.category}
+                          </span>
+                        </div>
+                        <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                          <HelpCircle className="w-4 h-4 text-[#84cc16] shrink-0" />
+                          <span>{faq.question}</span>
+                        </h4>
+                        <p className="text-xs text-[#ccfbf1]/90 leading-relaxed pl-6">
+                          {faq.answer}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingFaqId(faq.id);
+                            setFaqForm({
+                              category: faq.category,
+                              question: faq.question,
+                              answer: faq.answer,
+                              published: faq.published !== false,
+                            });
+                            setShowFaqModal(true);
+                          }}
+                          className="p-2 rounded-xl bg-[#073834] text-[#5eead4] hover:text-white border border-[#0d9488]/40 transition-colors"
+                          title="ویرایش این سؤال"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!window.confirm('آیا از حذف این سؤال متداول اطمینان دارید؟')) return;
+                            try {
+                              const res = await fetch(`/api/faq/${faq.id}`, { method: 'DELETE' });
+                              const data = await res.json();
+                              if (data.success) {
+                                showSuccess('سؤال متداول با موفقیت حذف شد.');
+                                fetchFaqsList();
+                                onRefreshData();
+                              } else {
+                                showError(data.message || 'خطا در حذف');
+                              }
+                            } catch {
+                              showError('خطا در برقراری ارتباط');
+                            }
+                          }}
+                          className="p-2 rounded-xl bg-rose-950/40 text-rose-400 hover:text-rose-200 border border-rose-800/40 transition-colors"
+                          title="حذف سؤال"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+
+            {/* Modal for Add / Edit FAQ */}
+            {showFaqModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm overflow-y-auto">
+                <div className="relative w-full max-w-lg bg-[#042f2e] border-2 border-[#0d9488]/60 rounded-3xl p-6 sm:p-8 shadow-2xl text-right my-8 max-h-[90vh] overflow-y-auto space-y-4">
+                  <div className="flex items-center justify-between pb-4 border-b border-[#0d9488]/30">
+                    <h3 className="text-lg font-black text-white flex items-center gap-2">
+                      <HelpCircle className="w-6 h-6 text-[#84cc16]" />
+                      <span>{editingFaqId ? 'ویرایش سؤال متداول' : 'افزودن سؤال متداول جدید'}</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setShowFaqModal(false)}
+                      className="p-1.5 rounded-xl bg-[#073834] text-stone-400 hover:text-white border border-[#0d9488]/30"
+                    >
+                      <XCircle className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!faqForm.question || !faqForm.answer) {
+                        showError('عنوان سؤال و متن پاسخ الزامی هستند.');
+                        return;
+                      }
+                      try {
+                        if (editingFaqId) {
+                          const res = await fetch(`/api/faq/${editingFaqId}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(faqForm),
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            showSuccess('سؤال متداول با موفقیت ویرایش شد.');
+                            setShowFaqModal(false);
+                            fetchFaqsList();
+                            onRefreshData();
+                          } else {
+                            showError(data.message || 'خطا در ویرایش');
+                          }
+                        } else {
+                          const res = await fetch('/api/faq', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(faqForm),
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            showSuccess('سؤال متداول جدید ایجاد شد.');
+                            setShowFaqModal(false);
+                            fetchFaqsList();
+                            onRefreshData();
+                          } else {
+                            showError(data.message || 'خطا در ایجاد');
+                          }
+                        }
+                      } catch {
+                        showError('خطا در برقراری ارتباط با سرور');
+                      }
+                    }}
+                    className="space-y-4"
+                  >
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                        دسته‌بندی سؤال:
+                      </label>
+                      <select
+                        value={faqForm.category}
+                        onChange={(e) => setFaqForm({ ...faqForm, category: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs font-bold"
+                      >
+                        <option value="عضویت و اشتراک">عضویت و اشتراک</option>
+                        <option value="امانت و رزرو کتاب">امانت و رزرو کتاب</option>
+                        <option value="مسابقات کتابخوانی">مسابقات کتابخوانی</option>
+                        <option value="ساعات کاری و قوانین">ساعات کاری و قوانین</option>
+                        <option value="عمومی">عمومی</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                        متن سؤال: <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={faqForm.question}
+                        onChange={(e) => setFaqForm({ ...faqForm, question: e.target.value })}
+                        placeholder="مثال: هزینه اشتراک سالانه امانت کتاب چقدر است؟"
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                        متن کامل پاسخ: <span className="text-rose-400">*</span>
+                      </label>
+                      <textarea
+                        required
+                        rows={4}
+                        value={faqForm.answer}
+                        onChange={(e) => setFaqForm({ ...faqForm, answer: e.target.value })}
+                        placeholder="پاسخ کامل و شفاف به سؤال کاربر..."
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                      />
+                    </div>
+
+                    <div className="pt-4 flex items-center justify-end gap-3 border-t border-[#0d9488]/30">
+                      <button
+                        type="button"
+                        onClick={() => setShowFaqModal(false)}
+                        className="px-4 py-2.5 rounded-xl bg-[#073834] text-stone-300 hover:text-white text-xs font-bold"
+                      >
+                        انصراف
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-6 py-2.5 rounded-xl bg-[#84cc16] hover:bg-[#a3e635] text-[#042f2e] font-black text-xs shadow-lg"
+                      >
+                        {editingFaqId ? 'ثبت ویرایش سؤال' : 'ایجاد سؤال جدید'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
