@@ -4,11 +4,12 @@ import {
   AlertCircle, Trash2, Edit3, Plus, ArrowLeft, RefreshCw,
   Sparkles, FileText, Search, Filter, MessageSquare, Send,
   Check, XCircle, RotateCcw, Calendar, CheckSquare, ChevronRight,
-  ChevronLeft, Download, FileSpreadsheet, Eye, Info
+  ChevronLeft, Download, FileSpreadsheet, Eye, Info, Image as ImageIcon,
+  FileUp, Loader2, Trophy, Link, ExternalLink
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { Book, Reservation, FAQItem, OperatingHours, LendingSettings, UserMessage, ManagedFile } from '../types';
-import { toPersianDigits } from '../utils/persian';
+import { Book, Reservation, FAQItem, OperatingHours, LendingSettings, UserMessage, ManagedFile, Competition, CompetitionRegistration, UserProfile } from '../types';
+import { toPersianDigits, getDaysRemaining } from '../utils/persian';
 import { SUBJECTS_LIST } from '../data/initialData';
 
 interface AdminDashboardProps {
@@ -44,7 +45,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onUpdateFeaturedBooks,
   onClose,
 }) => {
-  const [activeTab, setActiveTab] = useState<'reservations' | 'import' | 'books' | 'messages' | 'featured' | 'hours'>('reservations');
+  const [activeTab, setActiveTab] = useState<'reservations' | 'import' | 'books' | 'messages' | 'competitions' | 'featured' | 'hours'>('reservations');
   
   // Feedback banners
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
@@ -339,6 +340,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     featured: false,
   };
   const [bookForm, setBookForm] = useState<Partial<Book>>(initialBookForm);
+  const [uploadingCover, setUploadingCover] = useState(false);
+
+  const handleCoverFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Check size limit: max 5MB
+    if (file.size > 5 * 1024 * 1024) {
+      showError('حجم فایل تصویر نباید بیشتر از ۵ مگابایت باشد.');
+      return;
+    }
+
+    setUploadingCover(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (uploadEvt) => {
+        const base64Data = uploadEvt.target?.result as string;
+        try {
+          const res = await fetch('/api/upload/image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              image: base64Data,
+              filename: file.name,
+            }),
+          });
+          const data = await res.json();
+          if (data.success && data.url) {
+            setBookForm((prev) => ({ ...prev, cover_image: data.url }));
+            showSuccess('تصویر جلد با موفقیت بارگذاری شد.');
+          } else {
+            showError(data.message || 'خطا در بارگذاری تصویر');
+          }
+        } catch {
+          // If server upload fails, fallback to direct data URL in state
+          setBookForm((prev) => ({ ...prev, cover_image: base64Data }));
+          showSuccess('تصویر جلد اعمال شد.');
+        } finally {
+          setUploadingCover(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch {
+      showError('خطا در خواندن فایل تصویر');
+      setUploadingCover(false);
+    }
+  };
 
   const handleBookSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -435,9 +483,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const calculateLoanDaysInfo = (res: Reservation) => {
     if (!res.due_date || (res.status !== 'امانت فعال' && res.status !== 'تأیید شده')) return null;
-    const now = new Date();
-    const due = new Date(res.due_date);
-    const diffDays = Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    const diffDays = getDaysRemaining(res.due_date);
+    if (diffDays === null || isNaN(diffDays)) {
+      return {
+        due_date_str: res.due_date,
+        diffDays: 0,
+        isOverdue: false,
+        isDueSoon: false,
+      };
+    }
     return {
       due_date_str: res.due_date,
       diffDays,
@@ -502,7 +556,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
       const data = await res.json();
       if (data.success) {
-        showSuccess('پاسخ برای کاربر ثبت گردید.');
+        showSuccess('پاسخ برای کاربر با موفقیت ثبت و ارسال شد.');
         fetchMessages();
         setReplyTextMap({ ...replyTextMap, [messageId]: '' });
       } else {
@@ -515,8 +569,199 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!confirm('آیا از حذف این پیام اطمینان دارید؟')) return;
+    try {
+      const res = await fetch(`/api/admin/messages/${messageId}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success) {
+        showSuccess('پیام حذف شد.');
+        fetchMessages();
+      } else {
+        showError(data.message || 'خطا در حذف پیام');
+      }
+    } catch {
+      showError('خطا در حذف پیام');
+    }
+  };
+
   // -------------------------------------------------------------
-  // 5. FEATURED & OPERATING HOURS
+  // 5. COMPETITIONS MANAGEMENT (CRUD + Poster Upload + Link)
+  // -------------------------------------------------------------
+  const [competitions, setCompetitions] = useState<Competition[]>([]);
+  const [loadingCompetitions, setLoadingCompetitions] = useState(false);
+  const [editingCompId, setEditingCompId] = useState<string | null>(null);
+  const [showCompModal, setShowCompModal] = useState(false);
+  const [compForm, setCompForm] = useState<Partial<Competition>>({
+    title: '',
+    book_title: '',
+    poster_url: '',
+    link_url: '',
+    description: '',
+    start_date: '',
+    end_date: '',
+    prizes: '',
+    status: 'در حال برگزاری',
+    questions_count: 20,
+  });
+
+  const fetchCompetitions = async () => {
+    setLoadingCompetitions(true);
+    try {
+      const res = await fetch('/api/competitions');
+      const data = await res.json();
+      if (data.success && data.competitions) {
+        setCompetitions(data.competitions);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingCompetitions(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'competitions') {
+      fetchCompetitions();
+    }
+  }, [activeTab]);
+
+  const handleOpenNewCompModal = () => {
+    setEditingCompId(null);
+    setCompForm({
+      title: '',
+      book_title: '',
+      poster_url: '',
+      link_url: '',
+      description: '',
+      start_date: new Date().toLocaleDateString('fa-IR'),
+      end_date: '',
+      prizes: '',
+      status: 'در حال برگزاری',
+      questions_count: 20,
+    });
+    setShowCompModal(true);
+  };
+
+  const handleOpenEditCompModal = (comp: Competition) => {
+    setEditingCompId(comp.id);
+    setCompForm({
+      title: comp.title,
+      book_title: comp.book_title || '',
+      poster_url: comp.poster_url || '',
+      link_url: comp.link_url || '',
+      description: comp.description,
+      start_date: comp.start_date,
+      end_date: comp.end_date,
+      prizes: Array.isArray(comp.prizes) ? comp.prizes.join('\n') : comp.prizes,
+      status: comp.status,
+      questions_count: comp.questions_count || 20,
+    });
+    setShowCompModal(true);
+  };
+
+  const handleSaveCompetition = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!compForm.title?.trim() || !compForm.description?.trim()) {
+      showError('عنوان مسابقه و توضیحات الزامی هستند.');
+      return;
+    }
+
+    try {
+      const prizesArray = compForm.prizes
+        ? (typeof compForm.prizes === 'string' ? compForm.prizes.split('\n').map(p => p.trim()).filter(Boolean) : compForm.prizes)
+        : [];
+
+      const payload = {
+        ...compForm,
+        prizes: prizesArray.length > 0 ? prizesArray : ['جوایز نقدی و بسته‌های فرهنگی نفیس'],
+      };
+
+      if (editingCompId) {
+        const res = await fetch(`/api/competitions/${editingCompId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showSuccess('مسابقه با موفقیت ویرایش شد.');
+          setShowCompModal(false);
+          fetchCompetitions();
+          onRefreshData();
+        } else {
+          showError(data.message || 'خطا در ویرایش مسابقه');
+        }
+      } else {
+        const res = await fetch('/api/competitions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showSuccess('مسابقه جدید با موفقیت ثبت شد.');
+          setShowCompModal(false);
+          fetchCompetitions();
+          onRefreshData();
+        } else {
+          showError(data.message || 'خطا در ثبت مسابقه');
+        }
+      }
+    } catch {
+      showError('خطا در برقراری ارتباط با سرور');
+    }
+  };
+
+  const handleDeleteCompetition = async (compId: string) => {
+    if (!confirm('آیا از حذف این مسابقه اطمینان دارید؟')) return;
+    try {
+      const res = await fetch(`/api/competitions/${compId}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (data.success) {
+        showSuccess('مسابقه با موفقیت حذف گردید.');
+        fetchCompetitions();
+        onRefreshData();
+      } else {
+        showError(data.message || 'خطا در حذف مسابقه');
+      }
+    } catch {
+      showError('خطا در حذف مسابقه');
+    }
+  };
+
+  const handleCompPosterUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showError('لطفاً فقط فایل تصویری (JPG, PNG, WebP) انتخاب نمایید.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      showError('حجم تصویر نباید بیشتر از ۵ مگابایت باشد.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      setCompForm({ ...compForm, poster_url: base64 });
+      showSuccess('پوستر مسابقه با موفقیت بارگذاری شد.');
+    };
+    reader.onerror = () => {
+      showError('خطا در خواندن فایل پوستر.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // -------------------------------------------------------------
+  // 6. FEATURED & OPERATING HOURS
   // -------------------------------------------------------------
   const [hoursForm, setHoursForm] = useState<OperatingHours>(operatingHours);
   const [selectedFeatured, setSelectedFeatured] = useState<string[]>(
@@ -612,6 +857,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               label: 'پیام‌های کاربران',
               icon: MessageSquare,
               badge: messages.filter((m) => m.status === 'در انتظار پاسخ').length,
+            },
+            {
+              id: 'competitions',
+              label: 'مسابقات کتابخوانی',
+              icon: Trophy,
+              count: competitions.length > 0 ? competitions.length : undefined,
             },
             {
               id: 'featured',
@@ -1137,10 +1388,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <strong className="block font-bold text-white truncate" title={f.name}>{f.name}</strong>
+                      <strong className="block font-bold text-white truncate" title={f.name || f.file_name}>{f.name || f.file_name}</strong>
                       <div className="flex items-center justify-between text-[11px] text-[#99f6e4]">
-                        <span>تعداد ردیف: {toPersianDigits(f.rows_count || 0)}</span>
-                        <span>{toPersianDigits(f.upload_date)}</span>
+                        <span>تعداد ردیف: {toPersianDigits(f.rows_count ?? f.records_count ?? 0)}</span>
+                        <span>{toPersianDigits(f.upload_date || f.uploaded_at || '')}</span>
                       </div>
                     </div>
                   ))}
@@ -1347,36 +1598,91 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <option value="مفقود">مفقود یا خارج از دسترسی</option>
                       </select>
                     </div>
-                    <div>
-                      <label className="block text-[#99f6e4] mb-1 font-bold">آدرس تصویر جلد (اختیاری):</label>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[#99f6e4] mb-1 font-bold">
+                        تصویر جلد کتاب (آدرس اینترنتی یا آپلود فایل عکسی):
+                      </label>
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                        <input
+                          type="text"
+                          value={bookForm.cover_image || ''}
+                          onChange={(e) => setBookForm({ ...bookForm, cover_image: e.target.value })}
+                          placeholder="https://... یا آپلود از رایانه/گوشی"
+                          className="flex-1 px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs font-mono"
+                        />
+                        <label className={`cursor-pointer shrink-0 px-3.5 py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm ${
+                          uploadingCover
+                            ? 'bg-[#0d9488]/50 text-white cursor-wait'
+                            : 'bg-[#0d9488] hover:bg-[#14b8a6] text-white'
+                        }`}>
+                          {uploadingCover ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>در حال آپلود...</span>
+                            </>
+                          ) : (
+                            <>
+                              <FileUp className="w-3.5 h-3.5 text-[#a3e635]" />
+                              <span>آپلود فایل عکس</span>
+                            </>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={uploadingCover}
+                            onChange={handleCoverFileUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+
+                      {/* Cover Image Preview if present */}
+                      {bookForm.cover_image && (
+                        <div className="mt-2 flex items-center gap-3 p-2 rounded-xl bg-[#042f2e] border border-[#0d9488]/30">
+                          <img
+                            src={bookForm.cover_image}
+                            alt="پیش‌نمایش جلد"
+                            className="w-10 h-14 object-cover rounded-lg border border-[#84cc16]/50 shadow-sm"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[11px] text-[#a3e635] font-bold block">✓ پیش‌نمایش تصویر جلد انتخاب شده</span>
+                            <span className="text-[10px] text-[#99f6e4]/70 truncate block">{bookForm.cover_image}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setBookForm({ ...bookForm, cover_image: '' })}
+                            className="text-rose-400 hover:text-rose-300 text-xs px-2 py-1 rounded-lg bg-rose-950/50 hover:bg-rose-900/50 border border-rose-800/40"
+                          >
+                            حذف تصویر
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-6 pt-1 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer text-[#99f6e4]">
                       <input
-                        type="url"
-                        value={bookForm.cover_image || ''}
-                        onChange={(e) => setBookForm({ ...bookForm, cover_image: e.target.value })}
-                        placeholder="https://..."
-                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs font-mono"
+                        type="checkbox"
+                        checked={bookForm.reservation_allowed !== false}
+                        onChange={(e) => setBookForm({ ...bookForm, reservation_allowed: e.target.checked })}
+                        className="rounded text-[#84cc16]"
                       />
-                    </div>
-                    <div className="flex items-center gap-4 pt-5">
-                      <label className="flex items-center gap-2 cursor-pointer text-[#99f6e4]">
-                        <input
-                          type="checkbox"
-                          checked={bookForm.reservation_allowed !== false}
-                          onChange={(e) => setBookForm({ ...bookForm, reservation_allowed: e.target.checked })}
-                          className="rounded text-[#84cc16]"
-                        />
-                        <span>امکان رزرو آنلاین</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer text-[#99f6e4]">
-                        <input
-                          type="checkbox"
-                          checked={!!bookForm.featured}
-                          onChange={(e) => setBookForm({ ...bookForm, featured: e.target.checked })}
-                          className="rounded text-[#84cc16]"
-                        />
-                        <span>کتاب ویژه (معرفی)</span>
-                      </label>
-                    </div>
+                      <span>امکان رزرو آنلاین توسط کاربران</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer text-[#99f6e4]">
+                      <input
+                        type="checkbox"
+                        checked={!!bookForm.featured}
+                        onChange={(e) => setBookForm({ ...bookForm, featured: e.target.checked })}
+                        className="rounded text-[#84cc16]"
+                      />
+                      <span>کتاب ویژه (معرفی در صفحه ۴ کتاب منتخب)</span>
+                    </label>
                   </div>
 
                   {/* Summary */}
@@ -1572,6 +1878,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         }`}>
                           {m.status}
                         </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMessage(m.id)}
+                          className="text-rose-400 hover:text-rose-300 p-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/60"
+                          title="حذف پیام"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
 
@@ -1615,7 +1929,390 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )}
 
         {/* ========================================================= */}
-        {/* TAB 5: FEATURED 4 BOOKS SELECTOR */}
+        {/* TAB 5: COMPETITIONS MANAGEMENT */}
+        {/* ========================================================= */}
+        {activeTab === 'competitions' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl">
+              <div>
+                <h3 className="text-xl font-black text-white flex items-center gap-2">
+                  <Trophy className="w-6 h-6 text-[#84cc16]" />
+                  <span>مدیریت مسابقات کتابخوانی</span>
+                </h3>
+                <p className="text-xs text-[#99f6e4] mt-1">
+                  تعریف مسابقات جدید، ویرایش پوستر، تاریخ، جوایز و لینک ورود به مسابقه یا ارسال پاسخ‌ها
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={fetchCompetitions}
+                  className="px-3.5 py-2.5 rounded-xl bg-[#042f2e] text-[#99f6e4] hover:text-white border border-[#0d9488]/40 text-xs font-bold flex items-center gap-2"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingCompetitions ? 'animate-spin' : ''}`} />
+                  <span>بروزرسانی</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenNewCompModal}
+                  className="px-5 py-2.5 rounded-xl bg-[#84cc16] hover:bg-[#a3e635] text-[#042f2e] font-black text-xs flex items-center gap-2 shadow-lg"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>افزودن مسابقه جدید</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Competitions Cards */}
+            {loadingCompetitions ? (
+              <div className="p-12 text-center text-[#99f6e4] flex items-center justify-center gap-2">
+                <Loader2 className="w-6 h-6 animate-spin text-[#84cc16]" />
+                <span>در حال بارگذاری مسابقات...</span>
+              </div>
+            ) : competitions.length === 0 ? (
+              <div className="p-12 rounded-3xl bg-[#073834]/60 border border-[#0d9488]/30 text-center space-y-4">
+                <Trophy className="w-12 h-12 text-[#84cc16]/50 mx-auto" />
+                <p className="text-[#ccfbf1] font-bold">هیچ مسابقه‌ای ثبت نشده است.</p>
+                <button
+                  type="button"
+                  onClick={handleOpenNewCompModal}
+                  className="px-4 py-2 rounded-xl bg-[#84cc16] text-[#042f2e] font-bold text-xs inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>ایجاد اولین مسابقه</span>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {competitions.map((comp) => (
+                  <div
+                    key={comp.id}
+                    className="p-6 rounded-3xl bg-[#073834]/80 border-2 border-[#0d9488]/40 hover:border-[#84cc16]/50 shadow-xl flex flex-col justify-between space-y-4 transition-all"
+                  >
+                    <div className="space-y-3">
+                      {/* Top badge & actions */}
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={`px-3 py-1 rounded-full text-[11px] font-black ${
+                            comp.status === 'در حال برگزاری'
+                              ? 'bg-[#84cc16] text-[#042f2e]'
+                              : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                          }`}
+                        >
+                          {comp.status}
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditCompModal(comp)}
+                            className="p-2 rounded-xl bg-[#042f2e] text-[#5eead4] hover:text-white border border-[#0d9488]/40 transition-colors"
+                            title="ویرایش مسابقه"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCompetition(comp.id)}
+                            className="p-2 rounded-xl bg-rose-950/40 text-rose-400 hover:text-rose-200 border border-rose-800/40 transition-colors"
+                            title="حذف مسابقه"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Poster if available */}
+                      {comp.poster_url && (
+                        <div className="w-full h-40 rounded-2xl overflow-hidden bg-[#042f2e] border border-[#0d9488]/30 relative group">
+                          <img
+                            src={comp.poster_url}
+                            alt={comp.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                      )}
+
+                      <h4 className="text-lg font-black text-white">{comp.title}</h4>
+
+                      {comp.book_title && (
+                        <p className="text-xs text-[#a3e635] font-bold">
+                          کتاب منبع: {comp.book_title}
+                        </p>
+                      )}
+
+                      <p className="text-xs text-[#ccfbf1]/90 leading-relaxed line-clamp-3">
+                        {comp.description}
+                      </p>
+
+                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-[#99f6e4] pt-2 border-t border-[#0d9488]/20">
+                        {comp.end_date && (
+                          <div className="flex items-center gap-1">
+                            <Calendar className="w-3.5 h-3.5 text-[#84cc16]" />
+                            <span>مهلت: {toPersianDigits(comp.end_date)}</span>
+                          </div>
+                        )}
+                        {comp.questions_count && (
+                          <span className="border-r border-[#0d9488]/30 pr-2">
+                            {toPersianDigits(comp.questions_count)} سؤال
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Link preview */}
+                      {comp.link_url && (
+                        <div className="pt-2">
+                          <a
+                            href={comp.link_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs text-[#84cc16] hover:text-[#a3e635] hover:underline"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span className="truncate max-w-xs">{comp.link_url}</span>
+                          </a>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-3 border-t border-[#0d9488]/30 flex items-center justify-between text-xs">
+                      <span className="text-stone-400 text-[11px]">شناسه: {comp.id}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditCompModal(comp)}
+                        className="text-[#84cc16] hover:underline font-bold text-xs flex items-center gap-1"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>ویرایش جزئیات</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Modal for Add / Edit Competition */}
+            {showCompModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto">
+                <div className="relative w-full max-w-2xl bg-[#042f2e] border-2 border-[#0d9488]/60 rounded-3xl p-6 sm:p-8 shadow-2xl text-right my-8 max-h-[90vh] overflow-y-auto">
+                  <div className="flex items-center justify-between pb-4 border-b border-[#0d9488]/30 mb-6">
+                    <h3 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
+                      <Trophy className="w-6 h-6 text-[#84cc16]" />
+                      <span>{editingCompId ? 'ویرایش مسابقه کتابخوانی' : 'افزودن مسابقه جدید'}</span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setShowCompModal(false)}
+                      className="p-1.5 rounded-xl bg-[#073834] text-stone-400 hover:text-white border border-[#0d9488]/30"
+                    >
+                      <XCircle className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleSaveCompetition} className="space-y-4">
+                    {/* Title */}
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                        عنوان مسابقه: <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={compForm.title || ''}
+                        onChange={(e) => setCompForm({ ...compForm, title: e.target.value })}
+                        placeholder="مثال: مسابقه بزرگ کتابخوانی «سلام بر ابراهیم»"
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs placeholder-stone-500"
+                      />
+                    </div>
+
+                    {/* Book title & status */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                          نام کتاب منبع:
+                        </label>
+                        <input
+                          type="text"
+                          value={compForm.book_title || ''}
+                          onChange={(e) => setCompForm({ ...compForm, book_title: e.target.value })}
+                          placeholder="مثال: سلام بر ابراهیم"
+                          className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs placeholder-stone-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                          وضعیت برگزاری:
+                        </label>
+                        <select
+                          value={compForm.status || 'در حال برگزاری'}
+                          onChange={(e) => setCompForm({ ...compForm, status: e.target.value as any })}
+                          className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                        >
+                          <option value="در حال برگزاری">در حال برگزاری</option>
+                          <option value="به زودی">به زودی</option>
+                          <option value="پایان یافته">پایان یافته</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Description */}
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                        توضیحات و راهنمای شرکت در مسابقه: <span className="text-rose-400">*</span>
+                      </label>
+                      <textarea
+                        required
+                        rows={3}
+                        value={compForm.description || ''}
+                        onChange={(e) => setCompForm({ ...compForm, description: e.target.value })}
+                        placeholder="اهداف مسابقه، نحوه آزمون و شرایط..."
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs placeholder-stone-500"
+                      />
+                    </div>
+
+                    {/* Poster Image URL and Upload */}
+                    <div className="p-4 rounded-2xl bg-[#073834]/60 border border-[#0d9488]/40 space-y-3">
+                      <label className="block text-xs font-bold text-white flex items-center gap-1.5">
+                        <ImageIcon className="w-4 h-4 text-[#84cc16]" />
+                        <span>تصویر یا پوستر مسابقه:</span>
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-3 items-center">
+                        <input
+                          type="text"
+                          value={compForm.poster_url || ''}
+                          onChange={(e) => setCompForm({ ...compForm, poster_url: e.target.value })}
+                          placeholder="آدرس اینترنتی پوستر (URL) یا از دکمه آپلود استفاده کنید..."
+                          className="w-full px-3 py-2 rounded-xl bg-[#042f2e] border border-[#0d9488]/40 text-white text-xs placeholder-stone-500"
+                        />
+                        <label className="shrink-0 px-4 py-2 rounded-xl bg-[#0d9488]/30 hover:bg-[#0d9488]/50 text-[#99f6e4] border border-[#0d9488]/50 text-xs font-bold flex items-center gap-1.5 cursor-pointer">
+                          <FileUp className="w-4 h-4 text-[#84cc16]" />
+                          <span>انتخاب فایل عکس</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleCompPosterUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+
+                      {compForm.poster_url && (
+                        <div className="mt-2 flex items-center gap-3">
+                          <img
+                            src={compForm.poster_url}
+                            alt="پیش‌نمایش پوستر"
+                            className="w-20 h-20 object-cover rounded-xl border border-[#84cc16]/50"
+                            referrerPolicy="no-referrer"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setCompForm({ ...compForm, poster_url: '' })}
+                            className="text-xs text-rose-400 hover:underline"
+                          >
+                            حذف تصویر پوستر
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Link URL for participation / test */}
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1 flex items-center gap-1.5">
+                        <Link className="w-3.5 h-3.5 text-[#84cc16]" />
+                        <span>لینک مستقیم ورود به آزمون / صفحه مسابقه (اختیاری):</span>
+                      </label>
+                      <input
+                        type="url"
+                        value={compForm.link_url || ''}
+                        onChange={(e) => setCompForm({ ...compForm, link_url: e.target.value })}
+                        placeholder="مثال: https://eitaa.com/shahidKarbalailibrary یا لینک گوگل‌فرم/دیگر"
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs placeholder-stone-500 dir-ltr text-left"
+                      />
+                    </div>
+
+                    {/* Dates & Questions Count */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                          تاریخ شروع:
+                        </label>
+                        <input
+                          type="text"
+                          value={compForm.start_date || ''}
+                          onChange={(e) => setCompForm({ ...compForm, start_date: e.target.value })}
+                          placeholder="۱۴۰۳/۰۱/۱۵"
+                          className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                          مهلت پایان:
+                        </label>
+                        <input
+                          type="text"
+                          value={compForm.end_date || ''}
+                          onChange={(e) => setCompForm({ ...compForm, end_date: e.target.value })}
+                          placeholder="۱۴۰۳/۰۲/۱۵"
+                          className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                          تعداد سؤالات:
+                        </label>
+                        <input
+                          type="number"
+                          value={compForm.questions_count || 20}
+                          onChange={(e) => setCompForm({ ...compForm, questions_count: parseInt(e.target.value) || 0 })}
+                          className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Prizes (newline separated) */}
+                    <div>
+                      <label className="block text-xs font-bold text-[#99f6e4] mb-1">
+                        جوایز برگزیدگان (هر جایزه در یک خط):
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={typeof compForm.prizes === 'string' ? compForm.prizes : (Array.isArray(compForm.prizes) ? compForm.prizes.join('\n') : '')}
+                        onChange={(e) => setCompForm({ ...compForm, prizes: e.target.value })}
+                        placeholder="کمک‌هزینه مشهد مقدس&#10;کارت هدیه ۵۰۰ هزار تومانی&#10;بسته کتاب نفیس"
+                        className="w-full px-3 py-2 rounded-xl bg-[#073834] border border-[#0d9488]/40 text-white text-xs placeholder-stone-500"
+                      />
+                    </div>
+
+                    {/* Submit buttons */}
+                    <div className="pt-4 flex items-center justify-end gap-3 border-t border-[#0d9488]/30">
+                      <button
+                        type="button"
+                        onClick={() => setShowCompModal(false)}
+                        className="px-4 py-2.5 rounded-xl bg-[#073834] text-stone-300 hover:text-white text-xs font-bold"
+                      >
+                        انصراف
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-6 py-2.5 rounded-xl bg-[#84cc16] hover:bg-[#a3e635] text-[#042f2e] font-black text-xs shadow-lg"
+                      >
+                        {editingCompId ? 'ثبت ویرایش مسابقه' : 'ایجاد مسابقه جدید'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================= */}
+        {/* TAB 6: FEATURED 4 BOOKS SELECTOR */}
         {/* ========================================================= */}
         {activeTab === 'featured' && (
           <div className="p-6 rounded-3xl bg-[#073834]/80 border border-[#0d9488]/40 shadow-xl space-y-6">

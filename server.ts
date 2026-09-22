@@ -10,10 +10,11 @@ import {
   INITIAL_QUOTES,
   INITIAL_OPERATING_HOURS,
   INITIAL_HOMEPAGE_CMS,
+  INITIAL_COMPETITIONS,
   SHELVES_LIST,
   SUBJECTS_LIST
 } from './src/data/initialData.js';
-import { Book, Reservation, UserProfile, FAQItem, FAQCategory, Competition, OperatingHours, HomepageCMS, AuditLog, UserMessage, ManagedFile } from './src/types.js';
+import { Book, Reservation, UserProfile, FAQItem, FAQCategory, Competition, CompetitionRegistration, OperatingHours, HomepageCMS, AuditLog, UserMessage, ManagedFile } from './src/types.js';
 
 dotenv.config();
 
@@ -33,6 +34,7 @@ interface DatabaseSchema {
   faqs: FAQItem[];
   faq_categories: FAQCategory[];
   competitions: Competition[];
+  competition_registrations: CompetitionRegistration[];
   operating_hours: OperatingHours;
   homepage_cms: HomepageCMS;
   audit_logs: AuditLog[];
@@ -53,6 +55,10 @@ function loadDatabase(): DatabaseSchema {
       const data = JSON.parse(content);
       if (!data.messages) data.messages = [];
       if (!data.managed_files) data.managed_files = [];
+      if (!data.competition_registrations) data.competition_registrations = [];
+      if (!data.competitions || data.competitions.length === 0) {
+        data.competitions = INITIAL_COMPETITIONS;
+      }
       if (!data.lending_settings) {
         data.lending_settings = {
           default_loan_days: 14,
@@ -84,7 +90,8 @@ function loadDatabase(): DatabaseSchema {
     ],
     faqs: INITIAL_FAQS,
     faq_categories: INITIAL_FAQ_CATEGORIES,
-    competitions: [],
+    competitions: INITIAL_COMPETITIONS,
+    competition_registrations: [],
     operating_hours: INITIAL_OPERATING_HOURS,
     homepage_cms: INITIAL_HOMEPAGE_CMS,
     audit_logs: [
@@ -677,7 +684,7 @@ async function startServer() {
 
   // Update reservation status (Admin)
   app.patch('/api/reservations/:id', (req, res) => {
-    const { status, admin_notes, pickup_deadline } = req.body;
+    const { status, admin_notes, pickup_deadline, loan_days } = req.body;
     const resItem = db.reservations.find((r) => r.id === req.params.id);
     if (!resItem) {
       return res.status(404).json({ success: false, message: 'درخواست رزرو یافت نشد.' });
@@ -689,13 +696,13 @@ async function startServer() {
 
     // Automatic lending calculation if moving to 'امانت فعال' or 'تأیید شده'
     if (status === 'امانت فعال' || status === 'تأیید شده') {
-      const defaultDays = db.lending_settings?.default_loan_days || 14;
+      const defaultDays = (loan_days && Number(loan_days) > 0) 
+        ? Number(loan_days) 
+        : (db.lending_settings?.default_loan_days || 14);
       if (!resItem.loan_started_at) {
         resItem.loan_started_at = new Date().toLocaleDateString('fa-IR');
       }
-      if (!resItem.due_date) {
-        resItem.due_date = getFuturePersianDate(defaultDays);
-      }
+      resItem.due_date = getFuturePersianDate(defaultDays);
       const bk = db.books.find((b) => b.id === resItem.book_id);
       if (bk) {
         bk.availability_status = status === 'امانت فعال' ? 'امانت' : 'رزرو شده';
@@ -717,6 +724,33 @@ async function startServer() {
     addAuditLog('تغییر وضعیت رزرو', 'مدیریت', `رزرو کتاب "${resItem.book_title}" به حالت "${resItem.status}" تغییر یافت.`, 'info');
 
     return res.json({ success: true, reservation: resItem, message: 'وضعیت رزرو با موفقیت به‌روزرسانی شد.' });
+  });
+
+  // Admin permanently deletes a reservation/lending request
+  app.delete('/api/reservations/:id', (req, res) => {
+    const target = db.reservations.find((r) => r.id === req.params.id);
+    if (!target) {
+      return res.status(404).json({ success: false, message: 'درخواست رزرو یافت نشد.' });
+    }
+    db.reservations = db.reservations.filter((r) => r.id !== req.params.id);
+    saveDatabase(db);
+    addAuditLog('حذف درخواست رزرو/امانت', 'مدیریت', `درخواست امانت کتاب "${target.book_title}" متعلق به ${target.user_name} حذف گردید.`, 'warning');
+    return res.json({ success: true, message: 'درخواست رزرو با موفقیت حذف گردید.' });
+  });
+
+  // SMS Reminder endpoint for due date notification
+  app.post('/api/reservations/:id/send-sms-reminder', (req, res) => {
+    const resItem = db.reservations.find((r) => r.id === req.params.id);
+    if (!resItem) {
+      return res.status(404).json({ success: false, message: 'درخواست یافت نشد.' });
+    }
+    const messageText = `کاربر گرامی ${resItem.user_name}، موعد بازگشت کتاب «${resItem.book_title}» به کتابخانه شهید کربلایی‌پور فرارسیده است (${resItem.due_date || 'امروز'}). لطفاً جهت تمدید یا عودت کتاب اقدام فرمایید.`;
+    addAuditLog('ارسال پیامک یادآوری موعد تحویل', 'سیستم', `پیامک به شماره ${resItem.user_phone} برای کتاب "${resItem.book_title}" ارسال شد: "${messageText}"`, 'info');
+    return res.json({
+      success: true,
+      message: `پیامک یادآوری به شماره ${resItem.user_phone} با موفقیت ارسال شد.`,
+      sms_text: messageText,
+    });
   });
 
   // User requests loan extension
@@ -812,25 +846,85 @@ async function startServer() {
     return res.json({ success: true, messages: db.messages || [] });
   });
 
-  // Admin replies to message
-  app.patch('/api/admin/messages/:id/reply', (req, res) => {
-    const { admin_reply, status } = req.body;
+  // Admin replies to message (supports both PATCH and POST, with 'admin_reply' or 'reply')
+  const handleAdminReply = (req: any, res: any) => {
+    const { admin_reply, reply, status } = req.body;
+    const finalReply = (admin_reply !== undefined ? admin_reply : reply || '').trim();
     const msg = (db.messages || []).find((m) => m.id === req.params.id);
     if (!msg) {
       return res.status(404).json({ success: false, message: 'پیام مورد نظر یافت نشد.' });
     }
-    if (admin_reply !== undefined) msg.admin_reply = admin_reply;
+    msg.admin_reply = finalReply;
     msg.status = status || 'پاسخ داده شده';
     msg.is_read = true;
     msg.replied_at = new Date().toLocaleDateString('fa-IR');
     saveDatabase(db);
     addAuditLog('پاسخ مدیریت به پیام', 'مدیریت', `پاسخ به پیام "${msg.subject}" از ${msg.user_name} ثبت شد.`, 'info');
     return res.json({ success: true, message: 'پاسخ با موفقیت ارسال شد.', messageItem: msg });
+  };
+
+  app.patch('/api/admin/messages/:id/reply', handleAdminReply);
+  app.post('/api/admin/messages/:id/reply', handleAdminReply);
+
+  // Admin marks message status / read
+  app.patch('/api/admin/messages/:id/status', (req, res) => {
+    const { status, is_read } = req.body;
+    const msg = (db.messages || []).find((m) => m.id === req.params.id);
+    if (!msg) {
+      return res.status(404).json({ success: false, message: 'پیام مورد نظر یافت نشد.' });
+    }
+    if (status !== undefined) msg.status = status;
+    if (is_read !== undefined) msg.is_read = is_read;
+    saveDatabase(db);
+    return res.json({ success: true, message: 'وضعیت پیام به‌روزرسانی شد.', messageItem: msg });
+  });
+
+  // Admin deletes a message
+  app.delete('/api/admin/messages/:id', (req, res) => {
+    db.messages = (db.messages || []).filter((m) => m.id !== req.params.id);
+    saveDatabase(db);
+    addAuditLog('حذف پیام کاربر', 'مدیریت', `پیام با شناسه ${req.params.id} حذف شد.`, 'warning');
+    return res.json({ success: true, message: 'پیام با موفقیت حذف گردید.' });
+  });
+
+  // ==================== IMAGE UPLOAD API (Cover Images) ====================
+  // Accepts base64 image or data URL for book covers and uploads
+  app.post('/api/upload/image', (req, res) => {
+    try {
+      const { image, filename } = req.body;
+      if (!image) {
+        return res.status(400).json({ success: false, message: 'داده‌های تصویر یافت نشد.' });
+      }
+
+      // Check if it's already a full data URL or needs formatting
+      let imageUrl = image;
+      if (image.startsWith('data:image/')) {
+        // Stored cleanly as data URL
+        imageUrl = image;
+      } else if (image.startsWith('http://') || image.startsWith('https://')) {
+        imageUrl = image;
+      } else {
+        imageUrl = `data:image/jpeg;base64,${image}`;
+      }
+
+      addAuditLog('آپلود تصویر جلد کتاب', 'مدیریت', `تصویر "${filename || 'جلد_کتاب'}" ثبت شد.`, 'info');
+      return res.json({
+        success: true,
+        message: 'تصویر جلد با موفقیت آپلود شد.',
+        url: imageUrl,
+      });
+    } catch (err: any) {
+      console.error('Image upload error:', err);
+      return res.status(500).json({ success: false, message: 'خطا در آپلود تصویر' });
+    }
   });
 
   // ==================== BATCH BOOKS & FILE MANAGEMENT ====================
   app.post('/api/books/batch', (req, res) => {
-    const { books: incomingBooks, mode = 'append', fileName = 'لیست_کتاب‌ها', fileType = 'excel', description } = req.body;
+    const { books: incomingBooks, mode = 'append', fileName, file_name, fileType, file_type, description } = req.body;
+    const finalFileName = fileName || file_name || 'لیست_کتاب‌ها';
+    const finalFileType = fileType || file_type || 'excel';
+
     if (!Array.isArray(incomingBooks) || incomingBooks.length === 0) {
       return res.status(400).json({ success: false, message: 'فایل حاوی اطلاعات معتبر کتاب نیست یا کتابی یافت نشد.' });
     }
@@ -879,8 +973,8 @@ async function startServer() {
     // Register in managed files
     const managedFile: ManagedFile = {
       id: `file-${Date.now()}`,
-      file_name: fileName,
-      file_type: fileType === 'txt' ? 'txt' : 'excel',
+      file_name: finalFileName,
+      file_type: finalFileType === 'txt' ? 'txt' : 'excel',
       file_size: processed.length * 128,
       uploaded_at: new Date().toLocaleDateString('fa-IR'),
       records_count: processed.length,
@@ -891,7 +985,7 @@ async function startServer() {
     db.managed_files.unshift(managedFile);
 
     saveDatabase(db);
-    addAuditLog('ورود دسته‌ای کتاب‌ها', 'مدیریت', `تعداد ${processed.length} رکورد کتاب از فایل "${fileName}" وارد شد.`, 'database');
+    addAuditLog('ورود دسته‌ای کتاب‌ها', 'مدیریت', `تعداد ${processed.length} رکورد کتاب از فایل "${finalFileName}" وارد شد (${mode === 'replace' ? 'جایگزینی کامل' : 'افزودن و به‌روزرسانی'}).`, 'database');
 
     return res.json({
       success: true,
@@ -907,9 +1001,13 @@ async function startServer() {
     return res.json({ success: true, files: db.managed_files || [] });
   });
 
-  // Delete Managed File
-  app.delete('/api/admin/files/:id', (req, res) => {
-    db.managed_files = (db.managed_files || []).filter((f) => f.id !== req.params.id);
+  // Delete Managed File (handles both /:id and query parameter ?id=)
+  app.delete(['/api/admin/files/:id', '/api/admin/files'], (req, res) => {
+    const targetId = req.params.id || (req.query.id as string);
+    if (!targetId) {
+      return res.status(400).json({ success: false, message: 'شناسه فایل مشخص نشده است.' });
+    }
+    db.managed_files = (db.managed_files || []).filter((f) => f.id !== targetId);
     saveDatabase(db);
     return res.json({ success: true, message: 'فایل با موفقیت حذف گردید.' });
   });
@@ -962,6 +1060,86 @@ async function startServer() {
     saveDatabase(db);
     addAuditLog('ویرایش مسابقه', 'مدیریت', `مسابقه "${db.competitions[idx].title}" به‌روزرسانی شد.`, 'info');
     return res.json({ success: true, competition: db.competitions[idx], message: 'مسابقه به‌روزرسانی شد.' });
+  });
+
+  app.delete('/api/competitions/:id', (req, res) => {
+    const targetComp = (db.competitions || []).find((c) => c.id === req.params.id);
+    db.competitions = (db.competitions || []).filter((c) => c.id !== req.params.id);
+    saveDatabase(db);
+    addAuditLog('حذف مسابقه', 'مدیریت', `مسابقه "${targetComp?.title || req.params.id}" حذف شد.`, 'warning');
+    return res.json({ success: true, message: 'مسابقه با موفقیت حذف گردید.' });
+  });
+
+  // Register user for a competition
+  app.post('/api/competitions/:id/register', (req, res) => {
+    const { full_name, phone, unit, selected_book } = req.body;
+    if (!full_name || !phone || !unit) {
+      return res.status(400).json({ success: false, message: 'وارد کردن نام و نام خانوادگی، شماره تماس و انتخاب واحد الزامی است.' });
+    }
+
+    const comp = (db.competitions || []).find((c) => c.id === req.params.id);
+    if (!comp) {
+      return res.status(404).json({ success: false, message: 'مسابقه مورد نظر یافت نشد.' });
+    }
+
+    const cleanPhone = phone.trim();
+    if (!db.competition_registrations) db.competition_registrations = [];
+
+    // Check duplicate registration
+    const existing = db.competition_registrations.find(
+      (r) => r.competition_id === comp.id && r.phone === cleanPhone
+    );
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: 'شما قبلاً در این مسابقه با این شماره تماس ثبت‌نام کرده‌اید.',
+      });
+    }
+
+    const reg: CompetitionRegistration = {
+      id: `reg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      competition_id: comp.id,
+      competition_title: comp.title,
+      full_name: full_name.trim(),
+      phone: cleanPhone,
+      unit,
+      selected_book: selected_book ? selected_book.trim() : comp.book_title || '',
+      registered_at: new Date().toLocaleDateString('fa-IR'),
+    };
+
+    db.competition_registrations.unshift(reg);
+    saveDatabase(db);
+    addAuditLog('ثبت‌نام مسابقه', reg.full_name, `ثبت‌نام در مسابقه "${comp.title}" (${unit})`, 'info');
+
+    return res.json({
+      success: true,
+      message: 'ثبت‌نام شما در مسابقه با موفقیت انجام شد.',
+      registration: reg,
+    });
+  });
+
+  // Get registrants for a competition (Admin)
+  app.get('/api/competitions/:id/registrants', (req, res) => {
+    const list = (db.competition_registrations || []).filter((r) => r.competition_id === req.params.id);
+    return res.json({ success: true, registrants: list });
+  });
+
+  // Get all users (Admin - User Info tab with full stats)
+  app.get('/api/admin/users', (req, res) => {
+    const usersWithStats = db.users.map((u) => {
+      const userRes = db.reservations.filter((r) => r.user_phone === u.phone);
+      const activeRes = userRes.filter((r) => r.status === 'در انتظار بررسی' || r.status === 'امانت فعال' || r.status === 'تأیید شده');
+      const returnedRes = userRes.filter((r) => r.status === 'تحویل داده شده');
+      const compRegs = (db.competition_registrations || []).filter((cr) => cr.phone === u.phone);
+      return {
+        ...u,
+        total_reservations: userRes.length,
+        active_loans_count: activeRes.length,
+        returned_count: returnedRes.length,
+        competitions_count: compRegs.length,
+      };
+    });
+    return res.json({ success: true, users: usersWithStats });
   });
 
   // ==================== FAQ API ====================

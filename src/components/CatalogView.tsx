@@ -223,7 +223,6 @@ export const CatalogView: React.FC<CatalogViewProps> = ({
                 <option value="all">همه وضعیت‌ها</option>
                 <option value="موجود">کتاب‌های موجود (قابل امانت)</option>
                 <option value="امانت">امانت داده شده</option>
-                <option value="غیرقابل امانت">مرجع و غیرقابل امانت</option>
               </select>
             </div>
 

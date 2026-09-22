@@ -26,7 +26,7 @@ export const QuotesCarousel: React.FC = () => {
         {/* Header - Stage 17 & 18.2: No "یادمان", clean and exact text */}
         <div className="text-center max-w-2xl mx-auto mb-12">
           <h2 className="text-3xl sm:text-4xl font-black text-white hover-hop tracking-tight">
-            کلام بزرگان درباره کتاب و معرفت
+            کلام بزرگان درباره کتاب و کتابخوانی
           </h2>
           <p className="mt-3 text-sm sm:text-base text-[#99f6e4] font-medium">
             احادیث و سخنان بزرگان درباره کتابخوانی

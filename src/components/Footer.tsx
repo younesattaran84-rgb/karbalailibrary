@@ -23,7 +23,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, onOpenAdmin }) => {
           
           {/* Col 1: High Contrast Library Logo & About */}
           <div className="space-y-4">
-            <div className="inline-block p-2 rounded-2xl bg-[#073834] border border-[#84cc16]/40 shadow-md">
+            <div className="inline-block p-2 rounded-2xl bg-[#073834] border border-[#0d9488]/40 shadow-md">
               <LibraryLogo size="md" />
             </div>
 

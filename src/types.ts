@@ -14,6 +14,7 @@ export interface Book {
   publication_year?: string;
   edition?: string;
   ISBN?: string;
+  isbn?: string;
   subject: string;
   secondary_subject?: string;
   shelf: number; // 1 to 16
@@ -22,6 +23,7 @@ export interface Book {
   language?: string;
   description: string;
   excerpt?: string;
+  story?: string;
   cover_image?: string;
   gallery_images?: string[];
   preview_video?: string;
@@ -96,12 +98,23 @@ export interface UserMessage {
 export interface ManagedFile {
   id: string;
   file_name: string;
+  name?: string;
   file_type: 'excel' | 'txt';
   file_size: number;
   uploaded_at: string;
+  upload_date?: string;
   records_count: number;
+  rows_count?: number;
   status: 'فعال' | 'بایگانی شده';
   description?: string;
+}
+
+export interface LendingSettings {
+  default_loan_days: number;
+  max_active_reservations?: number;
+  max_extensions: number;
+  extension_days: number;
+  allow_extensions?: boolean;
 }
 
 export interface RulesCMS {
@@ -141,11 +154,24 @@ export interface FAQCategory {
   order: number;
 }
 
+export interface CompetitionRegistration {
+  id: string;
+  competition_id: string;
+  competition_title: string;
+  full_name: string;
+  phone: string;
+  unit: 'واحد راهنمایی' | 'واحد دبیرستان' | 'واحد طلاب و دانشجویان' | 'عموم مردم';
+  selected_book?: string;
+  registered_at: string;
+}
+
 export interface Competition {
   id: string;
   title: string;
   book_title?: string;
+  sources?: string[]; // Multiple book sources if available
   poster_url?: string;
+  link_url?: string;
   description: string;
   rules?: string;
   start_date: string;

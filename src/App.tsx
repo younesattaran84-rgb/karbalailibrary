@@ -5,8 +5,6 @@ import { LoadingScreen } from './components/LoadingScreen';
 import { Hero } from './components/Hero';
 import { StatsSection } from './components/StatsSection';
 import { RulesSection } from './components/RulesSection';
-import { InteractiveShelfBook } from './components/InteractiveShelfBook';
-import { FloatingLibraryElements } from './components/FloatingLibraryElements';
 import { LibraryEmojiSprinkles } from './components/LibraryEmojiSprinkles';
 import { ShelvesSection } from './components/ShelvesSection';
 import { WhyUsSection } from './components/WhyUsSection';
@@ -22,9 +20,10 @@ import {
   INITIAL_BOOKS,
   INITIAL_FAQS,
   INITIAL_FAQ_CATEGORIES,
-  INITIAL_OPERATING_HOURS
+  INITIAL_OPERATING_HOURS,
+  INITIAL_COMPETITIONS
 } from './data/initialData';
-import { Book, UserProfile, Reservation, FAQItem, OperatingHours } from './types';
+import { Book, UserProfile, Reservation, FAQItem, OperatingHours, Competition } from './types';
 
 export function App() {
   const [showLoading, setShowLoading] = useState(true);
@@ -35,6 +34,7 @@ export function App() {
   const [books, setBooks] = useState<Book[]>(INITIAL_BOOKS);
   const [featuredBooks, setFeaturedBooks] = useState<Book[]>(INITIAL_BOOKS.slice(0, 4));
   const [faqs, setFaqs] = useState<FAQItem[]>(INITIAL_FAQS);
+  const [competitions, setCompetitions] = useState<Competition[]>(INITIAL_COMPETITIONS);
   const [operatingHours, setOperatingHours] = useState<OperatingHours>(INITIAL_OPERATING_HOURS);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [stats, setStats] = useState<any>(null);
@@ -99,6 +99,13 @@ export function App() {
       if (hoursRes.ok) {
         const hoursData = await hoursRes.json();
         if (hoursData.operating_hours) setOperatingHours(hoursData.operating_hours);
+      }
+
+      // Competitions
+      const compRes = await fetch('/api/competitions');
+      if (compRes.ok) {
+        const compData = await compRes.json();
+        if (compData.competitions) setCompetitions(compData.competitions);
       }
 
       // Reservations
@@ -251,6 +258,32 @@ export function App() {
     return data;
   };
 
+  const handleBatchImportBooks = async (
+    incomingBooks: Partial<Book>[],
+    mode: 'append' | 'replace',
+    fileName: string,
+    fileType: 'excel' | 'txt',
+    description?: string
+  ) => {
+    const res = await fetch('/api/books/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        books: incomingBooks,
+        mode,
+        fileName,
+        fileType,
+        description,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'خطا در ثبت دسته‌ای کتاب‌ها');
+    }
+    loadDataFromServer();
+    return data;
+  };
+
   const handleAddBook = async (book: Partial<Book>) => {
     const res = await fetch('/api/books', {
       method: 'POST',
@@ -289,6 +322,20 @@ export function App() {
     const data = await res.json();
     loadDataFromServer();
     return data.success;
+  };
+
+  const handleExtendReservation = async (reservationId: string, weeks: 1 | 2 = 1) => {
+    const res = await fetch(`/api/reservations/${reservationId}/extend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ weeks }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'خطا در ثبت درخواست تمدید');
+    }
+    loadDataFromServer();
+    return true;
   };
 
   const handleUpdateOperatingHours = async (hours: OperatingHours) => {
@@ -339,7 +386,6 @@ export function App() {
         {currentTab === 'home' && (
           <div className="relative overflow-x-hidden">
             <LibraryEmojiSprinkles />
-            <FloatingLibraryElements />
 
             <Hero
               onSearchClick={() => handleNavigate('books')}
@@ -350,8 +396,6 @@ export function App() {
             />
 
             <StatsSection stats={stats} />
-
-            <InteractiveShelfBook />
 
             <div id="shelves-section-anchor">
               <ShelvesSection
@@ -404,6 +448,7 @@ export function App() {
           <CompetitionsView
             currentUser={currentUser}
             onOpenAuth={() => setAccountModalOpen(true)}
+            competitions={competitions}
           />
         )}
 
@@ -421,6 +466,7 @@ export function App() {
             operatingHours={operatingHours}
             onRefreshData={loadDataFromServer}
             onImportHtml={handleImportHtml}
+            onBatchImportBooks={handleBatchImportBooks}
             onAddBook={handleAddBook}
             onUpdateBook={handleUpdateBook}
             onDeleteBook={handleDeleteBook}
@@ -443,6 +489,7 @@ export function App() {
         onAdminLogin={handleAdminLogin}
         onLogout={handleLogout}
         userReservations={userReservations}
+        onExtendReservation={handleExtendReservation}
       />
 
       {/* Footer */}

@@ -50,6 +50,74 @@ export function normalizePersian(text: string): string {
     .toLowerCase();
 }
 
+// Convert Jalali (Shamsi) date YYYY/MM/DD to Gregorian Date object
+export function jalaliToGregorian(jy: number, jm: number, jd: number): Date {
+  jy += 1595;
+  let days = -355668 + (365 * jy) + Math.floor((33 * jy + 3) / 135) + 
+    (jm < 7 ? (jm - 1) * 31 : ((jm - 7) * 30) + 186) + jd;
+  let gy = 400 * Math.floor(days / 146097);
+  days %= 146097;
+  if (days > 36524) {
+    gy += 100 * Math.floor(--days / 36524);
+    days %= 36524;
+    if (days >= 365) days++;
+  }
+  gy += 4 * Math.floor(days / 1461);
+  days %= 1461;
+  if (days > 365) {
+    gy += Math.floor((days - 1) / 365);
+    days = (days - 1) % 365;
+  }
+  const sal_a = [0, 31, ((gy % 4 === 0 && gy % 100 !== 0) || (gy % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let gm = 0;
+  while (gm < 12 && days >= sal_a[gm]) {
+    days -= sal_a[gm];
+    gm++;
+  }
+  return new Date(Date.UTC(gy, gm - 1, days + 1, 12, 0, 0));
+}
+
+// Parse Persian or standard date string into Gregorian Date
+export function parseDateSafe(dateStr?: string | null): Date | null {
+  if (!dateStr) return null;
+  const clean = toEnglishDigits(dateStr.trim());
+  
+  // Try ISO / standard timestamp first
+  if (clean.includes('-') && !clean.includes('/')) {
+    const d = new Date(clean);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // Check for Shamsi YYYY/MM/DD or YYYY-MM-DD
+  const parts = clean.split(/[/\\-]/).map((p) => parseInt(p, 10));
+  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    let [year, month, day] = parts;
+    if (year > 1300 && year < 1500) {
+      // Jalali year
+      return jalaliToGregorian(year, month, day);
+    } else if (year >= 1900) {
+      return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+    }
+  }
+
+  const fallback = new Date(clean);
+  return isNaN(fallback.getTime()) ? null : fallback;
+}
+
+// Calculate remaining days from current UTC/World time to due date
+export function getDaysRemaining(dueDateStr?: string | null): number | null {
+  if (!dueDateStr) return null;
+  const dueDate = parseDateSafe(dueDateStr);
+  if (!dueDate) return null;
+
+  const now = new Date();
+  const utcNow = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const utcDue = Date.UTC(dueDate.getUTCFullYear(), dueDate.getUTCMonth(), dueDate.getUTCDate());
+
+  const diffTime = utcDue - utcNow;
+  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+}
+
 // Check if library is currently open based on default and admin rules
 export function isLibraryOpenNow(overrides?: {
   is_temporarily_closed?: boolean;

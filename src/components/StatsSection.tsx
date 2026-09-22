@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Layers, Bookmark, Users, CheckCircle2 } from 'lucide-react';
-import { toPersianDigits, formatPersianNumber } from '../utils/persian';
+import { BookOpen, Layers, Bookmark, CheckCircle2 } from 'lucide-react';
+import { toPersianDigits } from '../utils/persian';
 
 interface StatsSectionProps {
   stats?: {
@@ -16,16 +16,12 @@ interface StatsSectionProps {
 
 export const StatsSection: React.FC<StatsSectionProps> = ({ stats }) => {
   const [counts, setCounts] = useState({
-    books: 0,
     shelves: 0,
     subjects: 0,
-    members: 0,
   });
 
-  const targetBooks = stats?.totalBooks || 7150;
   const targetShelves = stats?.shelvesCount || 16;
   const targetSubjects = stats?.subjectsCount || 33;
-  const targetMembers = stats?.membersCount || 1540;
 
   useEffect(() => {
     let startTimestamp: number | null = null;
@@ -38,10 +34,8 @@ export const StatsSection: React.FC<StatsSectionProps> = ({ stats }) => {
       const ease = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
 
       setCounts({
-        books: Math.floor(ease * targetBooks),
         shelves: Math.floor(ease * targetShelves),
         subjects: Math.floor(ease * targetSubjects),
-        members: Math.floor(ease * targetMembers),
       });
 
       if (progress < 1) {
@@ -50,13 +44,13 @@ export const StatsSection: React.FC<StatsSectionProps> = ({ stats }) => {
     };
 
     window.requestAnimationFrame(step);
-  }, [targetBooks, targetShelves, targetSubjects, targetMembers]);
+  }, [targetShelves, targetSubjects]);
 
   const cards = [
     {
       id: 'books-stat',
       title: 'کتاب موجود در کتابخانه',
-      value: '+7000',
+      value: '+۷۰۰۰',
       sub: 'گنجینه‌ای ارزشمند از کتب معارفی، تاریخی، علمی و ادبی',
       icon: BookOpen,
       accent: 'from-[#84cc16] to-[#65a30d]',
@@ -84,16 +78,6 @@ export const StatsSection: React.FC<StatsSectionProps> = ({ stats }) => {
       border: 'border-sky-500/40',
       badge: 'دسته‌بندی جامع',
     },
-    {
-      id: 'members-stat',
-      title: 'عضو فعال کتابخانه',
-      value: `+${formatPersianNumber(counts.members)}`,
-      sub: 'محله فاز دو پادادشهر و نمازگزاران گرامی مسجد امام خمینی(ره)',
-      icon: Users,
-      accent: 'from-[#eab308] to-[#ca8a04]',
-      border: 'border-amber-500/40',
-      badge: 'اعضای فعال',
-    },
   ];
 
   return (
@@ -114,8 +98,8 @@ export const StatsSection: React.FC<StatsSectionProps> = ({ stats }) => {
           </p>
         </div>
 
-        {/* 4 Cards Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* 3 Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
           {cards.map((card) => {
             const Icon = card.icon;
             return (
@@ -138,7 +122,7 @@ export const StatsSection: React.FC<StatsSectionProps> = ({ stats }) => {
 
                   <div className="mt-2">
                     <div className="text-3xl sm:text-4xl font-black text-white tracking-tight flex items-baseline gap-1">
-                      <span className="hover-hop text-white group-hover:text-[#a3e635] transition-colors">
+                      <span className="hover-hop text-white group-hover:text-[#a3e635] transition-colors" dir="ltr">
                         {card.value}
                       </span>
                     </div>

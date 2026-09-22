@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { X, User, Shield, Lock, Phone, UserCheck, KeyRound, CheckCircle, AlertCircle, LogOut } from 'lucide-react';
-import { UserProfile, Reservation } from '../types';
-import { toPersianDigits } from '../utils/persian';
+import React, { useState, useEffect } from 'react';
+import { X, User, Shield, Lock, Phone, UserCheck, KeyRound, CheckCircle, AlertCircle, LogOut, MessageSquare, Send, RefreshCw } from 'lucide-react';
+import { UserProfile, Reservation, UserMessage } from '../types';
+import { toPersianDigits, getDaysRemaining } from '../utils/persian';
 
 interface AccountModalProps {
   isOpen: boolean;
@@ -13,7 +13,7 @@ interface AccountModalProps {
   onAdminLogin: (username: string, serial: string) => Promise<boolean>;
   onLogout: () => void;
   userReservations?: Reservation[];
-  onExtendReservation?: (reservationId: string) => Promise<boolean>;
+  onExtendReservation?: (reservationId: string, weeks?: 1 | 2) => Promise<boolean>;
 }
 
 export const AccountModal: React.FC<AccountModalProps> = ({
@@ -43,6 +43,30 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   const [msgSubject, setMsgSubject] = useState('');
   const [msgText, setMsgText] = useState('');
   const [msgSending, setMsgSending] = useState(false);
+  const [userMessages, setUserMessages] = useState<UserMessage[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+
+  const fetchUserMessages = async () => {
+    if (!currentUser?.phone) return;
+    setLoadingMessages(true);
+    try {
+      const res = await fetch(`/api/user/messages?phone=${currentUser.phone}`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.messages)) {
+        setUserMessages(data.messages);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser?.phone) {
+      fetchUserMessages();
+    }
+  }, [currentUser?.phone]);
 
   if (!isOpen) return null;
 
@@ -161,7 +185,14 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   ) : (
                     <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                       {userReservations.map((res) => {
-                        const canExtend = (res.status === 'امانت فعال' || res.status === 'تأیید شده') && (!res.extension_status || res.extension_status === 'رد شده');
+                        const daysLeft = res.due_date ? getDaysRemaining(res.due_date) : null;
+                        const hasAlreadyExtended = (res.extension_count || 0) >= 1;
+                        const isUnder3Days = daysLeft !== null && daysLeft <= 3;
+                        const canExtend = (res.status === 'امانت فعال' || res.status === 'تأیید شده') && 
+                          !hasAlreadyExtended && 
+                          (!res.extension_status || res.extension_status === 'رد شده') &&
+                          isUnder3Days;
+
                         return (
                           <div
                             key={res.id}
@@ -183,42 +214,89 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                               </span>
                             </div>
 
-                            {/* Due date if available */}
+                            {/* Due date if available with countdown */}
                             {res.due_date && (
                               <div className="flex items-center justify-between text-[11px] bg-[#073834]/60 px-2 py-1 rounded-lg border border-[#0d9488]/20">
                                 <span className="text-[#99f6e4]">موعد تحویل:</span>
-                                <span className="font-bold text-[#a3e635]">{toPersianDigits(res.due_date)}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-bold text-[#a3e635]">{toPersianDigits(res.due_date)}</span>
+                                  {daysLeft !== null && (
+                                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                                      daysLeft < 0
+                                        ? 'bg-rose-950/80 text-rose-300'
+                                        : daysLeft <= 3
+                                        ? 'bg-amber-950/80 text-amber-300'
+                                        : 'bg-[#042f2e] text-[#99f6e4]'
+                                    }`}>
+                                      ({daysLeft < 0 ? `${toPersianDigits(Math.abs(daysLeft))} روز تاخیر` : `${toPersianDigits(daysLeft)} روز باقیمانده`})
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             )}
 
                             {/* Extension status or request button */}
                             {res.extension_status === 'در انتظار بررسی' ? (
                               <div className="text-[10px] text-amber-300 bg-amber-950/60 p-1.5 rounded-lg border border-amber-600/30 text-center font-medium">
-                                ⏳ درخواست تمدید شما برای بررسی ادمین ارسال شده است.
+                                ⏳ درخواست تمدید شما ({toPersianDigits(res.extension_requested_weeks || 1)} هفته) برای بررسی ادمین ارسال شده است.
                               </div>
                             ) : res.extension_status === 'تأیید شده' ? (
                               <div className="text-[10px] text-[#a3e635] bg-emerald-950/60 p-1.5 rounded-lg border border-[#84cc16]/30 text-center font-medium">
-                                ✓ تمدید امانت تأیید شده است.
+                                ✓ تمدید امانت این کتاب یک‌بار با موفقیت تأیید شده است.
+                              </div>
+                            ) : hasAlreadyExtended ? (
+                              <div className="text-[10px] text-stone-400 bg-[#073834]/40 p-1 rounded text-center">
+                                سقف ۱ بار تمدید برای این کتاب استفاده شده است.
                               </div>
                             ) : canExtend && onExtendReservation ? (
-                              <button
-                                type="button"
-                                disabled={extendingId === res.id}
-                                onClick={async () => {
-                                  setExtendingId(res.id);
-                                  try {
-                                    await onExtendReservation(res.id);
-                                    setSuccessMsg('درخواست تمدید امانت ثبت گردید.');
-                                  } catch (err: any) {
-                                    setErrorMsg(err.message || 'خطا در ثبت تمدید');
-                                  } finally {
-                                    setExtendingId(null);
-                                  }
-                                }}
-                                className="w-full py-1 px-2.5 rounded-lg bg-[#073834] hover:bg-[#0d9488]/30 border border-[#84cc16]/50 text-[#a3e635] text-[10px] font-bold transition-all disabled:opacity-50"
-                              >
-                                {extendingId === res.id ? 'در حال ثبت...' : 'درخواست تمدید ۷ روزه'}
-                              </button>
+                              <div className="pt-1 space-y-1">
+                                <div className="text-[10px] text-amber-300 flex items-center justify-between">
+                                  <span>کمتر از ۳ روز تا موعد تحویل مانده است:</span>
+                                  <span className="text-stone-400 text-[9px]">(امکان تمدید فقط یکبار)</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={extendingId === res.id}
+                                    onClick={async () => {
+                                      setExtendingId(res.id);
+                                      try {
+                                        await onExtendReservation(res.id, 1);
+                                        setSuccessMsg('درخواست تمدید ۱ هفته‌ای با موفقیت ارسال شد.');
+                                      } catch (err: any) {
+                                        setErrorMsg(err.message || 'خطا در ثبت تمدید');
+                                      } finally {
+                                        setExtendingId(null);
+                                      }
+                                    }}
+                                    className="flex-1 py-1.5 px-2 rounded-lg bg-[#073834] hover:bg-[#0d9488]/40 border border-[#84cc16]/60 text-[#a3e635] text-[10px] font-black transition-all disabled:opacity-50"
+                                  >
+                                    {extendingId === res.id ? '...' : 'تمدید ۱ هفته (۷ روز)'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={extendingId === res.id}
+                                    onClick={async () => {
+                                      setExtendingId(res.id);
+                                      try {
+                                        await onExtendReservation(res.id, 2);
+                                        setSuccessMsg('درخواست تمدید ۲ هفته‌ای با موفقیت ارسال شد.');
+                                      } catch (err: any) {
+                                        setErrorMsg(err.message || 'خطا در ثبت تمدید');
+                                      } finally {
+                                        setExtendingId(null);
+                                      }
+                                    }}
+                                    className="flex-1 py-1.5 px-2 rounded-lg bg-[#073834] hover:bg-[#0d9488]/40 border border-[#84cc16]/60 text-[#a3e635] text-[10px] font-black transition-all disabled:opacity-50"
+                                  >
+                                    {extendingId === res.id ? '...' : 'تمدید ۲ هفته (۱۴ روز)'}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : !isUnder3Days && (res.status === 'امانت فعال' || res.status === 'تأیید شده') ? (
+                              <div className="text-[10px] text-[#99f6e4]/60 text-center">
+                                امکان درخواست تمدید در ۳ روز پایانی موعد امانت فعال می‌شود.
+                              </div>
                             ) : null}
                           </div>
                         );
@@ -228,14 +306,57 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                 </div>
 
                 {/* Direct Message to Admin Drawer */}
-                <div className="pt-2 border-t border-[#0d9488]/20">
+                <div className="pt-2 border-t border-[#0d9488]/20 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <MessageSquare className="w-3.5 h-3.5 text-[#84cc16]" />
+                      <span>پیام‌ها و پاسخ‌های مدیریت:</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={fetchUserMessages}
+                      className="p-1 rounded-lg bg-[#042f2e] text-[#99f6e4] hover:text-white"
+                      title="تازه‌سازی پیام‌ها"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${loadingMessages ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
+
+                  {/* Previous messages from user with admin replies */}
+                  {userMessages.length > 0 && (
+                    <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                      {userMessages.map((msg) => (
+                        <div key={msg.id} className="p-2.5 rounded-xl bg-[#042f2e] border border-[#0d9488]/30 text-xs space-y-1">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <strong className="text-white truncate">{msg.subject}</strong>
+                            <span className={`px-1.5 py-0.2 rounded-full font-bold ${
+                              msg.status === 'پاسخ داده شده'
+                                ? 'bg-emerald-950 text-[#a3e635] border border-[#84cc16]/30'
+                                : 'bg-amber-950 text-amber-300 border border-amber-600/30'
+                            }`}>
+                              {msg.status}
+                            </span>
+                          </div>
+                          <p className="text-[#99f6e4] text-[11px]">{msg.content}</p>
+                          {msg.admin_reply && (
+                            <div className="mt-1 p-1.5 rounded-lg bg-[#073834] border border-[#84cc16]/40 text-[#a3e635] text-[11px]">
+                              <span className="font-bold block text-[10px] text-white">پاسخ مدیر کتابخانه:</span>
+                              <span>{msg.admin_reply}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {!showMessageBox ? (
                     <button
                       type="button"
                       onClick={() => setShowMessageBox(true)}
                       className="w-full py-2 px-3 rounded-xl bg-[#042f2e] hover:bg-[#0d9488]/20 border border-[#0d9488]/40 text-[#99f6e4] text-xs font-bold flex items-center justify-center gap-2 transition-all"
                     >
-                      <span>✉️ ارسال پیام یا سوال به مدیریت کتابخانه</span>
+                      <Send className="w-3.5 h-3.5 text-[#84cc16]" />
+                      <span>ارسال پیام یا سوال جدید به مدیریت</span>
                     </button>
                   ) : (
                     <div className="p-3 rounded-xl bg-[#042f2e] border border-[#0d9488]/40 space-y-2 text-xs">
@@ -286,6 +407,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                               setShowMessageBox(false);
                               setMsgSubject('');
                               setMsgText('');
+                              fetchUserMessages();
                             } else {
                               setErrorMsg(data.message || 'خطا در ارسال پیام');
                             }

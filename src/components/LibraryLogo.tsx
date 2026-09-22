@@ -54,7 +54,7 @@ export const LibraryLogo: React.FC<LibraryLogoProps> = ({
         }}
         whileHover={{ scale: 1.08, rotate: 2 }}
         whileTap={{ scale: 0.95 }}
-        className={`${iconDimensions} relative flex items-center justify-center rounded-2xl bg-gradient-to-br from-[#0f766e] via-[#0d9488] to-[#042f2e] p-1.5 shadow-xl shadow-[#0d9488]/30 border-2 border-[#84cc16]/90 ring-2 ring-[#042f2e]/80 transition-shadow duration-300 hover:shadow-[#84cc16]/40 cursor-pointer overflow-hidden group`}
+        className={`${iconDimensions} relative flex items-center justify-center rounded-2xl bg-gradient-to-br from-[#0f766e] via-[#0d9488] to-[#042f2e] p-1.5 shadow-lg shadow-[#0d9488]/20 border border-[#0d9488]/40 transition-shadow duration-300 hover:shadow-[#14b8a6]/40 cursor-pointer overflow-hidden group`}
       >
         {/* Shimmer light sweep across logo */}
         <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/30 to-transparent pointer-events-none z-10" />
